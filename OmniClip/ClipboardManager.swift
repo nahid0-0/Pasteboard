@@ -157,19 +157,24 @@ class ClipboardManager: ObservableObject {
         let unpinnedCount = clips.count - pinnedCount
         
         // Remove oldest unpinned items if over limit
+        // Newest items are at index 0, oldest at the end — remove from the end
         if unpinnedCount > maxUnpinnedItems {
             let itemsToRemove = unpinnedCount - maxUnpinnedItems
             var removed = 0
+            var indicesToRemove: [Int] = []
             
-            clips = clips.filter { clip in
-                if removed >= itemsToRemove {
-                    return true
-                }
-                if !clip.isPinned {
+            // Iterate from the end (oldest) to find unpinned items to evict
+            for i in stride(from: clips.count - 1, through: 0, by: -1) {
+                if removed >= itemsToRemove { break }
+                if !clips[i].isPinned {
+                    indicesToRemove.append(i)
                     removed += 1
-                    return false
                 }
-                return true
+            }
+            
+            // Remove in reverse-sorted order to keep indices valid
+            for index in indicesToRemove.sorted().reversed() {
+                clips.remove(at: index)
             }
         }
         
