@@ -122,10 +122,13 @@ struct ImageClip: ClipItem {
         self._cachedFullImage = nsImage
     }
     
-    /// Display name: filename if available, otherwise dimensions
+    /// Display name: filename if available, source app name if from web, otherwise dimensions
     var displayName: String {
         if let name = originalFileName {
             return name
+        }
+        if let appName = sourceAppName {
+            return appName
         }
         return "\(width) x \(height)"
     }

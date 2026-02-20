@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct OmniClipApp: App {
+struct PasteboardApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {

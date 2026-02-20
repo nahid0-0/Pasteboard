@@ -1,4 +1,4 @@
-# OmniClip
+# Pasteboard
 
 A lightweight clipboard manager for macOS that runs in the menu bar.
 
@@ -6,32 +6,35 @@ A lightweight clipboard manager for macOS that runs in the menu bar.
 
 - 📋 Automatic clipboard history tracking
 - 🖼️ Screenshot detection and management
-- ⚡ Quick access via menu bar
-- 🔍 Preview clipboard items before pasting
-- ⌨️ Global hotkey support (⌘ + Shift + V)
-- 🗑️ Easy item management (delete, clear all)
+- ⚡ Quick access via menu bar or global hotkey
+- 🔍 Search and filter clipboard items
+- 🔎 Preview clipboard items with syntax highlighting
+- ⌨️ Configurable global hotkey and keyboard navigation
+- 📌 Pin important clips to keep them at the top
+- 🗑️ Easy item management (delete, clear all/unpinned)
 - 💾 Persistent storage across app restarts
 - 🎨 Clean, native macOS interface
 
 ## Download
 
-**[Download OmniClip.app](https://github.com/nahid0-0/OmniClip/raw/main/build/OmniClip.app.zip)**
+**[Download Pasteboard.app](https://github.com/nahid0-0/Pasteboard/raw/main/build/Pasteboard.app.zip)**
 
 ## Installation
 
 1. Download the app using the link above
 2. Unzip if downloaded as .zip
-3. Move `OmniClip.app` to your `/Applications` folder
+3. Move `Pasteboard.app` to your `/Applications` folder
 4. Right-click the app and select "Open" (first time only to bypass Gatekeeper)
 5. The app will appear in your menu bar
 
 ## Usage
 
 - Click the clipboard icon in the menu bar to view history
-- Press `⌘ + Shift + V` to quickly access clipboard history
+- Use the global hotkey (configurable in Settings) to quickly access clipboard history
 - Click any item to copy it to clipboard
-- Hover over items to see a larger preview
-- Use Settings to configure behavior
+- Use filter pills to filter by type (Text, Image, URL, File)
+- Search clips using the search bar
+- Use Settings to configure behavior, hotkeys, and navigation shortcuts
 
 ## Building from Source
 
@@ -44,17 +47,17 @@ A lightweight clipboard manager for macOS that runs in the menu bar.
 
 ```bash
 # Clone the repository
-git clone https://github.com/nahid0-0/OmniClip.git
-cd OmniClip
+git clone https://github.com/nahid0-0/Pasteboard.git
+cd Pasteboard
 
 # Run the build script
 ./build.sh
 
-# The app will be created at build/OmniClip.app
-open build/OmniClip.app
+# The app will be created at build/Pasteboard.app
+open build/Pasteboard.app
 ```
 
-Or open `OmniClip.xcodeproj` in Xcode and build normally.
+Or open the Xcode project and build normally.
 
 ## System Requirements
 
@@ -63,7 +66,7 @@ Or open `OmniClip.xcodeproj` in Xcode and build normally.
 
 ## Permissions
 
-OmniClip requires the following permissions:
+Pasteboard requires the following permissions:
 - **Accessibility**: To capture global hotkeys
 - **Screen Recording**: To detect and manage screenshots (optional)
 

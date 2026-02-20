@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "🔨 Building OmniClip without Xcode..."
+echo "🔨 Building Pasteboard without Xcode..."
 
 # Configuration
-APP_NAME="OmniClip"
+APP_NAME="Pasteboard"
 BUILD_DIR="build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
@@ -28,6 +28,7 @@ swiftc -o "$MACOS_DIR/$APP_NAME" \
     -framework SwiftUI \
     -framework Combine \
     -framework CoreServices \
+    -framework Carbon \
     OmniClip/OmniClipApp.swift \
     OmniClip/AppDelegate.swift \
     OmniClip/AppSettings.swift \

@@ -9,7 +9,7 @@ class KeyboardActionPublisher: ObservableObject {
     var lastAction: String = ""  // "up", "down", "enter", "search"
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var panel: NSPanel!
@@ -17,11 +17,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var clipboardManager: ClipboardManager!
     private var appSettings: AppSettings!
     private var settingsObserver: AnyCancellable?
+    private var hotkeyObservers: [AnyCancellable] = []
     private var hotKeyRef: EventHotKeyRef?
+    private var eventHandlerRef: EventHandlerRef?
     private var keyMonitor: Any?
     
     // Shared with ContentView
     let keyboardActions = KeyboardActionPublisher()
+    let toolbarState = ToolbarState()
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         appSettings = AppSettings()
@@ -38,41 +41,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if let button = statusItem.button {
             let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-            button.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "OmniClip")?.withSymbolConfiguration(config)
+            button.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Pasteboard")?.withSymbolConfiguration(config)
             button.action = #selector(statusItemClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
-        let contentView = ContentView(
+        let popoverContentView = ContentView(
             clipboardManager: clipboardManager,
             appSettings: appSettings,
-            keyboardActions: keyboardActions
+            keyboardActions: keyboardActions,
+            toolbarState: toolbarState
         )
         
         // Create popover (menu bar dropdown mode)
         popover = NSPopover()
         popover.contentSize = NSSize(width: 900, height: 600)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: contentView)
+        popover.contentViewController = NSHostingController(rootView: popoverContentView)
+        
+        let panelContentView = ContentView(
+            clipboardManager: clipboardManager,
+            appSettings: appSettings,
+            keyboardActions: keyboardActions,
+            toolbarState: toolbarState
+        )
         
         // Create panel (centered popup / keyboard mode)
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
-            styleMask: [.titled, .closable, .nonactivatingPanel],
+            styleMask: [.titled, .closable, .resizable, .miniaturizable, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        panel.title = "OmniClip"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.title = "Pasteboard"
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.transient, .ignoresCycle]
+        panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = true
-        panel.contentView = NSHostingView(rootView: contentView)
+        panel.contentView = NSHostingView(rootView: panelContentView)
+        panel.delegate = self
+        panel.minSize = NSSize(width: 700, height: 400)
         
-        // Register global hotkey: Cmd+Shift+J
-        registerGlobalHotKey()
+        // Embed toolbar in the titlebar row
+        let titlebarAccessory = NSTitlebarAccessoryViewController()
+        let toolbarView = TitlebarToolbarView(toolbarState: toolbarState)
+        titlebarAccessory.view = NSHostingView(rootView: toolbarView)
+        titlebarAccessory.layoutAttribute = .bottom
+        panel.addTitlebarAccessoryViewController(titlebarAccessory)
+        
+        // Register global hotkey from settings
+        if appSettings.keyboardModeEnabled {
+            registerGlobalHotKey()
+        }
+        
+        // Watch for hotkey setting changes
+        observeHotkeySettings()
         
         // Set up keyboard monitor for navigation
         setupKeyboardMonitor()
@@ -84,6 +111,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: .dismissOmniClip,
             object: nil
         )
+        
+        // Listen for settings notification from ContentView toolbar
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openSettings),
+            name: .openOmniClipSettings,
+            object: nil
+        )
+    }
+    
+    // MARK: - Hotkey Settings Observers
+    
+    private func observeHotkeySettings() {
+        let keyCodeObs = appSettings.$toggleHotkeyKeyCode.dropFirst().sink { [weak self] _ in
+            self?.reregisterHotKey()
+        }
+        let modObs = appSettings.$toggleHotkeyModifiers.dropFirst().sink { [weak self] _ in
+            self?.reregisterHotKey()
+        }
+        let enabledObs = appSettings.$keyboardModeEnabled.dropFirst().sink { [weak self] enabled in
+            if enabled {
+                self?.registerGlobalHotKey()
+            } else {
+                self?.unregisterGlobalHotKey()
+            }
+        }
+        hotkeyObservers = [keyCodeObs, modObs, enabledObs]
+    }
+    
+    private func reregisterHotKey() {
+        guard appSettings.keyboardModeEnabled else { return }
+        unregisterGlobalHotKey()
+        registerGlobalHotKey()
     }
     
     @objc private func handleDismiss() {
@@ -91,6 +151,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         }
         panel.orderOut(nil)
+    }
+    
+    // MARK: - NSWindowDelegate (Fullscreen)
+    
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        panel.level = .normal
+        panel.hidesOnDeactivate = false
+    }
+    
+    func windowDidExitFullScreen(_ notification: Notification) {
+        panel.level = .floating
+        panel.hidesOnDeactivate = true
     }
     
     // MARK: - Keyboard Monitor (runs in AppDelegate for reliability)
@@ -103,35 +175,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let isVisible = self.popover.isShown || self.panel.isVisible
             guard isVisible else { return event }
             
-            let shift = event.modifierFlags.contains(.shift)
-            let cmd = event.modifierFlags.contains(.command)
-            let opt = event.modifierFlags.contains(.option)
-            let ctrl = event.modifierFlags.contains(.control)
-            let plainModifiers = !cmd && !opt && !ctrl
+            // Only compare the four standard modifiers; arrow keys add .numericPad/.function
+            let standardMask: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
+            let modifiers = event.modifierFlags.intersection(standardMask)
+            let keyCode = event.keyCode
             
-            // Shift+Up
-            if event.keyCode == 126 && shift && plainModifiers {
+            // Navigate Up
+            let navUpMods = NSEvent.ModifierFlags(rawValue: self.appSettings.navUpModifiers).intersection(standardMask)
+            if keyCode == self.appSettings.navUpKeyCode && modifiers == navUpMods {
                 self.keyboardActions.lastAction = "up"
                 self.keyboardActions.actionCounter += 1
                 return nil
             }
             
-            // Shift+Down
-            if event.keyCode == 125 && shift && plainModifiers {
+            // Navigate Down
+            let navDownMods = NSEvent.ModifierFlags(rawValue: self.appSettings.navDownModifiers).intersection(standardMask)
+            if keyCode == self.appSettings.navDownKeyCode && modifiers == navDownMods {
                 self.keyboardActions.lastAction = "down"
                 self.keyboardActions.actionCounter += 1
                 return nil
             }
             
-            // Shift+Left - focus search
-            if event.keyCode == 123 && shift && plainModifiers {
+            // Shift+Left - focus search (keep hardcoded for simplicity)
+            let shift = modifiers.contains(.shift)
+            let cmd = modifiers.contains(.command)
+            let opt = modifiers.contains(.option)
+            let ctrl = modifiers.contains(.control)
+            let plainModifiers = !cmd && !opt && !ctrl
+            
+            if keyCode == 123 && shift && plainModifiers {
                 self.keyboardActions.lastAction = "search"
                 self.keyboardActions.actionCounter += 1
                 return nil
             }
             
             // Enter/Return
-            if (event.keyCode == 36 || event.keyCode == 76) && !shift && plainModifiers {
+            if (keyCode == 36 || keyCode == 76) && !shift && plainModifiers {
                 self.keyboardActions.lastAction = "enter"
                 self.keyboardActions.actionCounter += 1
                 return nil
@@ -141,11 +220,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    // MARK: - Global Hotkey (Cmd+Shift+J)
+    // MARK: - Global Hotkey
     
     private func registerGlobalHotKey() {
-        let keyCode: UInt32 = 38
-        let modifiers: UInt32 = UInt32(cmdKey | shiftKey)
+        let keyCode = appSettings.toggleHotkeyKeyCode
+        let modifiers = appSettings.toggleHotkeyModifiers
         
         var hotKeyID = EventHotKeyID()
         hotKeyID.signature = OSType(0x4F43_4C50)
@@ -155,6 +234,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventType.eventClass = OSType(kEventClassKeyboard)
         eventType.eventKind = UInt32(kEventHotKeyPressed)
         
+        var handlerRef: EventHandlerRef?
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, event, userData) -> OSStatus in
@@ -168,11 +248,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             1,
             &eventType,
             Unmanaged.passUnretained(self).toOpaque(),
-            nil
+            &handlerRef
         )
         
         if status == noErr {
+            eventHandlerRef = handlerRef
             RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        }
+    }
+    
+    private func unregisterGlobalHotKey() {
+        if let hotKeyRef = hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        if let handlerRef = eventHandlerRef {
+            RemoveEventHandler(handlerRef)
+            self.eventHandlerRef = nil
         }
     }
     
@@ -183,6 +275,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if popover.isShown {
                 popover.performClose(nil)
             }
+            toolbarState.isPopoverMode = false
             centerPanel()
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -211,6 +304,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             popover.performClose(nil)
         } else {
             panel.orderOut(nil)
+            toolbarState.isPopoverMode = true
             if let button = statusItem.button {
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             }
@@ -225,6 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if popover.isShown {
                 popover.performClose(nil)
             }
+            toolbarState.isPopoverMode = false
             centerPanel()
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -253,9 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit OmniClip", action: #selector(quitApp), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit Pasteboard", action: #selector(quitApp), keyEquivalent: "q"))
         
         if let button = statusItem.button {
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
@@ -270,14 +363,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 340, height: 440),
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 580),
                 styleMask: [.titled, .closable],
                 backing: .buffered,
                 defer: false
             )
-            window.title = "OmniClip Settings"
+            // Prevent Cocoa from releasing the window on close (ARC already manages lifetime).
+            // Without this, the second open crashes because the underlying object is freed.
+            window.isReleasedWhenClosed = false
+            window.title = "Pasteboard Settings"
             window.center()
             window.contentView = NSHostingView(rootView: SettingsView(settings: appSettings))
+            // Nil out the reference when the user closes the window so it is recreated fresh next time
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.settingsWindow = nil
+            }
             settingsWindow = window
         }
         
@@ -292,9 +396,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         clipboardManager.stopMonitoring()
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
+        unregisterGlobalHotKey()
         if let monitor = keyMonitor {
             NSEvent.removeMonitor(monitor)
         }

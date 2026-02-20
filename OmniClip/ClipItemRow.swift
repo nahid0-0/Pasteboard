@@ -9,6 +9,12 @@ struct ClipItemRow: View, Equatable {
     
     @State private var isHovering = false
     
+    private let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+    
     static func == (lhs: ClipItemRow, rhs: ClipItemRow) -> Bool {
         lhs.clip.id == rhs.clip.id &&
         lhs.isSelected == rhs.isSelected &&
@@ -17,57 +23,75 @@ struct ClipItemRow: View, Equatable {
     
     var body: some View {
         Button(action: onSelect) {
-            HStack(alignment: .center, spacing: 10) {
-                // Source app icon
-                if let icon = clip.sourceAppIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 16, height: 16)
-                        .cornerRadius(3)
-                } else {
-                    Image(systemName: "app.dashed")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .frame(width: 16, height: 16)
-                }
-                
-                // Content preview
-                contentPreview
-                
-                Spacer()
-                
-                // Data type badge
-                Text(clip.dataType.rawValue)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(3)
-                
-                // Copy button (appears on hover)
-                if isHovering {
-                    Button(action: {
-                        onCopy()
-                    }) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.caption)
+            VStack(alignment: .leading, spacing: 6) {
+                // Top: source icon + content preview
+                HStack(alignment: .center, spacing: 8) {
+                    if let icon = clip.sourceAppIcon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                            .cornerRadius(4)
+                    } else {
+                        Image(systemName: "app.dashed")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                            .frame(width: 20, height: 20)
+                    }
+                    
+                    contentPreview
+                    
+                    Spacer(minLength: 4)
+                    
+                    if isHovering {
+                        Button(action: { onCopy() }) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                                .foregroundColor(.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy to clipboard")
+                    }
+                    
+                    if clip.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
                             .foregroundColor(.accentColor)
                     }
-                    .buttonStyle(.plain)
-                    .help("Copy to clipboard")
                 }
                 
-                // Pin indicator
-                if clip.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(.accentColor)
+                // Bottom: metadata chips
+                HStack(spacing: 6) {
+                    // Time chip
+                    metadataChip(
+                        icon: "clock",
+                        text: relativeDateFormatter.localizedString(for: clip.createdAt, relativeTo: Date())
+                    )
+                    
+                    // Type chip
+                    metadataChip(
+                        icon: typeIcon,
+                        text: clip.dataType.rawValue
+                    )
+                    
+                    // Size chip
+                    metadataChip(
+                        icon: "internaldrive",
+                        text: formatBytes(clip.dataSize)
+                    )
+                    
+                    Spacer()
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.secondary.opacity(0.18) : (isHovering ? Color.secondary.opacity(0.06) : Color(NSColor.controlBackgroundColor)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.secondary.opacity(0.35) : Color.secondary.opacity(0.12), lineWidth: 1)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -76,53 +100,67 @@ struct ClipItemRow: View, Equatable {
         }
     }
     
+    // MARK: - Type icon
+    
+    private var typeIcon: String {
+        switch clip.dataType {
+        case .plainText: return "doc.text"
+        case .url: return "link"
+        case .image: return "photo"
+        case .file: return "doc"
+        }
+    }
+    
+    // MARK: - Metadata Chip
+    
+    private func metadataChip(icon: String, text: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 8))
+            Text(text)
+                .font(.system(size: 9))
+        }
+        .foregroundColor(.secondary)
+    }
+    
+    // MARK: - Content Preview
+    
     @ViewBuilder
     private var contentPreview: some View {
         switch clip {
         case .text(let textClip):
             Text(String(textClip.text.prefix(200)))
                 .lineLimit(2)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundColor(.primary)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             
         case .image(let imageClip):
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 if let thumbnail = imageClip.thumbnail() {
                     Image(nsImage: thumbnail)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 40, height: 40)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 28, height: 28)
                         .cornerRadius(4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                        )
+                        .clipped()
                 }
-                
                 Text(imageClip.displayName)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundColor(.primary)
                     .lineLimit(1)
             }
             
         case .file(let fileClip):
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(nsImage: fileClip.cachedFileIcon)
                     .resizable()
-                    .frame(width: 32, height: 32)
-                
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(fileClip.fileName)
-                        .font(.system(size: 12))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    
-                    Text(formatBytes(Int(fileClip.fileSize)))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
+                    .frame(width: 24, height: 24)
+                Text(fileClip.fileName)
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
             }
         }
     }

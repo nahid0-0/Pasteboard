@@ -1,13 +1,25 @@
 import SwiftUI
 import AppKit
 
+// Shared state for toolbar — used by both titlebar accessory and ContentView
+class ToolbarState: ObservableObject {
+    @Published var searchText: String = ""
+    @Published var typeFilter: String = "All"
+    @Published var searchFieldFocused: Bool = false
+    @Published var clipCount: Int = 0
+    @Published var isPopoverMode: Bool = false
+    
+    let typeFilterOptions = ["All", "Text", "Image", "URL", "File"]
+}
+
 struct ContentView: View {
     @ObservedObject var clipboardManager: ClipboardManager
     @ObservedObject var appSettings: AppSettings
     @ObservedObject var keyboardActions: KeyboardActionPublisher
+    @ObservedObject var toolbarState: ToolbarState
     @State private var selectedClipID: UUID?
-    @State private var searchText = ""
-    @State private var searchFieldFocused = false
+    @State private var leftPanelWidth: CGFloat = 380
+    @State private var dragStartWidth: CGFloat = 380
     
     var selectedClip: ClipType? {
         guard let id = selectedClipID else { return nil }
@@ -17,42 +29,60 @@ struct ContentView: View {
     var filteredClips: [ClipType] {
         let clips = clipboardManager.sortedClips
         
-        if searchText.isEmpty {
-            return clips
+        // Apply type filter
+        let typeFiltered: [ClipType]
+        switch toolbarState.typeFilter {
+        case "Text":
+            typeFiltered = clips.filter { $0.dataType == .plainText }
+        case "Image":
+            typeFiltered = clips.filter { $0.dataType == .image }
+        case "URL":
+            typeFiltered = clips.filter { $0.dataType == .url }
+        case "File":
+            typeFiltered = clips.filter { $0.dataType == .file }
+        default:
+            typeFiltered = clips
         }
         
-        return clips.filter { clip in
+        // Apply search filter
+        if toolbarState.searchText.isEmpty {
+            return typeFiltered
+        }
+        
+        return typeFiltered.filter { clip in
             switch clip {
             case .text(let textClip):
-                return textClip.text.localizedCaseInsensitiveContains(searchText)
+                return textClip.text.localizedCaseInsensitiveContains(toolbarState.searchText)
             case .image:
                 return false
             case .file(let fileClip):
-                return fileClip.fileName.localizedCaseInsensitiveContains(searchText)
+                return fileClip.fileName.localizedCaseInsensitiveContains(toolbarState.searchText)
             }
         }
     }
     
     var body: some View {
-        HStack(spacing: 0) {
+        VStack(spacing: 0) {
+            // Show inline toolbar in popover mode (no titlebar accessory)
+            if toolbarState.isPopoverMode {
+                TitlebarToolbarView(toolbarState: toolbarState)
+                    .padding(.horizontal, 6)
+                    .frame(height: 36)
+                    .background(Color(NSColor.controlBackgroundColor))
+                Divider()
+            }
+            
+            HStack(spacing: 0) {
             // Left side: List of clips
             VStack(spacing: 0) {
-                // Search bar
-                SearchField(text: $searchText, isFocused: $searchFieldFocused)
-                    .padding(8)
-                    .background(Color(NSColor.controlBackgroundColor))
-                
-                Divider()
-                
-                // Clips list
                 if filteredClips.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "clipboard")
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                        Text(searchText.isEmpty ? "No clips yet" : "No matching clips")
+                        Text(toolbarState.searchText.isEmpty ? "No clips yet" : "No matching clips")
                             .foregroundColor(.secondary)
-                        if searchText.isEmpty {
+                        if toolbarState.searchText.isEmpty {
                             Text("Copy something to get started")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -62,7 +92,7 @@ struct ContentView: View {
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVStack(spacing: 0) {
+                            LazyVStack(spacing: 4) {
                                 ForEach(filteredClips) { clip in
                                     EquatableView(content: ClipItemRow(
                                         clip: clip,
@@ -78,9 +108,10 @@ struct ContentView: View {
                                         }
                                     ))
                                     .id(clip.id)
-                                    Divider()
                                 }
                             }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
                         }
                         .scrollIndicators(.never)
                         .onChange(of: selectedClipID) { newID in
@@ -95,7 +126,7 @@ struct ContentView: View {
                 
                 Divider()
                 
-                // Bottom toolbar
+                // Bottom status bar
                 HStack(spacing: 12) {
                     Text("\(filteredClips.count) clips")
                         .font(.caption)
@@ -103,7 +134,7 @@ struct ContentView: View {
                     
                     Spacer()
                     
-                    Text("Shift+\u{2191}\u{2193}  Enter")
+                    Text("\(appSettings.navUpDisplay)\(appSettings.navDownDisplay)  Enter")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 5)
@@ -129,9 +160,30 @@ struct ContentView: View {
                 .padding(8)
                 .background(Color(NSColor.controlBackgroundColor))
             }
-            .frame(width: 380)
+            .frame(width: leftPanelWidth)
             
-            Divider()
+            // Draggable resize handle
+            ZStack {
+                Color(NSColor.separatorColor)
+                    .frame(width: 1)
+                NonDraggableArea()
+                    .frame(width: 8)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                let newWidth = dragStartWidth + value.translation.width
+                                leftPanelWidth = max(220, min(650, newWidth))
+                            }
+                            .onEnded { _ in
+                                dragStartWidth = leftPanelWidth
+                            }
+                    )
+            }
+            .frame(width: 8)
             
             // Right side: Preview panel
             if let clip = selectedClip {
@@ -153,17 +205,20 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(NSColor.textBackgroundColor))
             }
+            }
         }
-        .frame(width: 900, height: 600)
+        .frame(minWidth: 700, idealWidth: 900, minHeight: 400, idealHeight: 600)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             if selectedClipID == nil, let firstClip = filteredClips.first {
                 selectedClipID = firstClip.id
             }
         }
-        // React to keyboard actions from AppDelegate
         .onChange(of: keyboardActions.actionCounter) { _ in
             handleKeyboardAction(keyboardActions.lastAction)
+        }
+        .onChange(of: filteredClips.count) { newCount in
+            toolbarState.clipCount = newCount
         }
     }
     
@@ -178,7 +233,7 @@ struct ContentView: View {
         case "enter":
             copySelectedAndDismiss()
         case "search":
-            searchFieldFocused = true
+            toolbarState.searchFieldFocused = true
         default:
             break
         }
@@ -188,7 +243,6 @@ struct ContentView: View {
         let clips = filteredClips
         guard !clips.isEmpty else { return }
         
-        // Resign search field so typing doesn't go there
         NSApp.keyWindow?.makeFirstResponder(nil)
         
         if let currentID = selectedClipID,
@@ -207,9 +261,62 @@ struct ContentView: View {
     }
 }
 
-// Notification for dismissing
+// Notifications
 extension Notification.Name {
     static let dismissOmniClip = Notification.Name("dismissOmniClip")
+    static let openOmniClipSettings = Notification.Name("openOmniClipSettings")
+}
+
+// MARK: - Titlebar Toolbar View (embedded in titlebar accessory)
+
+struct TitlebarToolbarView: View {
+    @ObservedObject var toolbarState: ToolbarState
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            // Search field
+            SearchField(text: $toolbarState.searchText, isFocused: $toolbarState.searchFieldFocused)
+                .frame(maxWidth: .infinity)
+            
+            // Filter pills
+            ForEach(toolbarState.typeFilterOptions, id: \.self) { option in
+                Button(action: { toolbarState.typeFilter = option }) {
+                    Text(option)
+                        .font(.system(size: 10, weight: toolbarState.typeFilter == option ? .semibold : .regular))
+                        .foregroundColor(toolbarState.typeFilter == option ? .primary : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(toolbarState.typeFilter == option ? Color.secondary.opacity(0.2) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            
+            Spacer()
+            
+            // Clip count
+            Text("\(toolbarState.clipCount) clips")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize()
+            
+            // Settings button
+            Button(action: {
+                NotificationCenter.default.post(name: .openOmniClipSettings, object: nil)
+            }) {
+                Image(systemName: "gear")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 12)
+        .frame(height: 28)
+    }
 }
 
 // NSViewRepresentable search field with focus control
@@ -223,6 +330,8 @@ struct SearchField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.focusRingType = .none
         field.bezelStyle = .roundedBezel
+        field.controlSize = .small
+        field.font = NSFont.systemFont(ofSize: 11)
         return field
     }
     
@@ -255,4 +364,20 @@ struct SearchField: NSViewRepresentable {
             }
         }
     }
+}
+
+// MARK: - Non-Draggable Area (prevents isMovableByWindowBackground from intercepting drags)
+
+private class NonDraggableNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+
+struct NonDraggableArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NonDraggableNSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
