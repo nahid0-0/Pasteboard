@@ -4,7 +4,6 @@ import AppKit
 struct ClipItemRow: View, Equatable {
     let clip: ClipType
     let isSelected: Bool
-    let showTimestamp: Bool
     let onSelect: () -> Void
     let onCopy: () -> Void
     
@@ -13,24 +12,38 @@ struct ClipItemRow: View, Equatable {
     static func == (lhs: ClipItemRow, rhs: ClipItemRow) -> Bool {
         lhs.clip.id == rhs.clip.id &&
         lhs.isSelected == rhs.isSelected &&
-        lhs.showTimestamp == rhs.showTimestamp &&
         lhs.clip.isPinned == rhs.clip.isPinned
     }
     
-    private let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter
-    }()
-    
     var body: some View {
         Button(action: onSelect) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                // Source app icon
+                if let icon = clip.sourceAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                        .cornerRadius(3)
+                } else {
+                    Image(systemName: "app.dashed")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .frame(width: 16, height: 16)
+                }
+                
                 // Content preview
                 contentPreview
                 
                 Spacer()
+                
+                // Data type badge
+                Text(clip.dataType.rawValue)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(3)
                 
                 // Copy button (appears on hover)
                 if isHovering {
@@ -48,7 +61,7 @@ struct ClipItemRow: View, Equatable {
                 // Pin indicator
                 if clip.isPinned {
                     Image(systemName: "pin.fill")
-                        .font(.caption)
+                        .font(.system(size: 9))
                         .foregroundColor(.accentColor)
                 }
             }
@@ -67,29 +80,20 @@ struct ClipItemRow: View, Equatable {
     private var contentPreview: some View {
         switch clip {
         case .text(let textClip):
-            VStack(alignment: .leading, spacing: 4) {
-                Text(String(textClip.text.prefix(200)))
-                    .lineLimit(2)
-                    .font(.system(size: 13))
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.leading)
-                
-                if showTimestamp {
-                    Text(dateFormatter.string(from: textClip.createdAt))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(String(textClip.text.prefix(200)))
+                .lineLimit(2)
+                .font(.system(size: 12))
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             
         case .image(let imageClip):
             HStack(spacing: 8) {
-                // Thumbnail
                 if let thumbnail = imageClip.thumbnail() {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 40, height: 40)
                         .cornerRadius(4)
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
@@ -97,25 +101,35 @@ struct ClipItemRow: View, Equatable {
                         )
                 }
                 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "photo")
-                            .font(.caption)
-                        Text("Image")
-                            .font(.system(size: 13))
-                    }
+                Text(imageClip.displayName)
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            }
+            
+        case .file(let fileClip):
+            HStack(spacing: 8) {
+                Image(nsImage: fileClip.cachedFileIcon)
+                    .resizable()
+                    .frame(width: 32, height: 32)
+                
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(fileClip.fileName)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
                     
-                    Text("\(imageClip.width) × \(imageClip.height)")
-                        .font(.caption2)
+                    Text(formatBytes(Int(fileClip.fileSize)))
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
-                    
-                    if showTimestamp {
-                        Text(dateFormatter.string(from: imageClip.createdAt))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
                 }
             }
         }
+    }
+    
+    private func formatBytes(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 }

@@ -6,6 +6,23 @@ struct SettingsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            // Appearance section
+            VStack(alignment: .leading, spacing: 12) {
+                Text("APPEARANCE")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Toggle("Centered popup window", isOn: $settings.usePopupMode)
+                    .toggleStyle(.checkbox)
+                
+                Text("Opens as a centered window instead of dropping from the menu bar. Takes effect on next toggle.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            
+            Divider()
+            
             // Behavior section
             VStack(alignment: .leading, spacing: 12) {
                 Text("BEHAVIOR")
@@ -15,10 +32,13 @@ struct SettingsView: View {
                 Toggle("Copy on single click", isOn: $settings.copyOnClick)
                     .toggleStyle(.checkbox)
                 
-                Toggle("Show timestamps", isOn: $settings.showTimestamps)
+                Toggle("Capture screenshots", isOn: $settings.captureScreenshots)
                     .toggleStyle(.checkbox)
                 
-                Toggle("Capture screenshots", isOn: $settings.captureScreenshots)
+                Toggle("Open URLs in browser on click", isOn: $settings.openURLsInBrowser)
+                    .toggleStyle(.checkbox)
+                
+                Toggle("Syntax highlighting for code", isOn: $settings.syntaxHighlighting)
                     .toggleStyle(.checkbox)
             }
             
@@ -64,6 +84,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 320, height: 320)
+        .frame(width: 340, height: 440)
     }
 }

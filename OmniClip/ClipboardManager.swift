@@ -13,6 +13,12 @@ class ClipboardManager: ObservableObject {
     private var settingsObserver: AnyCancellable?
     private var ignoreNextClipboardChange: Bool = false
     
+    // Get the frontmost app info at capture time
+    private var frontmostAppInfo: (name: String?, bundleID: String?) {
+        let app = NSWorkspace.shared.frontmostApplication
+        return (app?.localizedName, app?.bundleIdentifier)
+    }
+    
     // Configuration
     private let maxTotalItems = 20
     private let maxUnpinnedItems = 15
@@ -66,7 +72,8 @@ class ClipboardManager: ObservableObject {
         // Ignore the next clipboard change since we're about to copy the screenshot
         ignoreNextClipboardChange = true
         
-        guard let imageClip = ImageClip(imageData: imageData) else {
+        let appInfo = frontmostAppInfo
+        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID) else {
             print("Failed to create image clip from screenshot")
             return
         }
@@ -93,17 +100,27 @@ class ClipboardManager: ObservableObject {
         let pasteboard = NSPasteboard.general
         let types = pasteboard.types ?? []
         
-        // Check for file URLs that point to images first
+        let imageExtensions = ["png", "jpg", "jpeg", "gif", "tiff", "bmp", "webp", "heic"]
+        
+        // Check for file URLs first
         if types.contains(.fileURL),
            let urlString = pasteboard.string(forType: .fileURL),
-           let url = URL(string: urlString),
-           ["png", "jpg", "jpeg", "gif", "tiff", "bmp", "webp", "heic"].contains(url.pathExtension.lowercased()),
-           let imageData = try? Data(contentsOf: url) {
-            captureImage(imageData)
-            return
+           let url = URL(string: urlString) {
+            let ext = url.pathExtension.lowercased()
+            
+            if imageExtensions.contains(ext),
+               let imageData = try? Data(contentsOf: url) {
+                // Image file - capture with filename
+                captureImage(imageData, originalFileName: url.lastPathComponent)
+                return
+            } else {
+                // Non-image file (dmg, zip, pdf, etc.) - capture as file reference
+                captureFile(url: url)
+                return
+            }
         }
         
-        // Try to capture image data (e.g. copied from apps)
+        // Try to capture image data (e.g. copied from apps, no file URL)
         if types.contains(.tiff) || types.contains(.png) {
             if let imageData = pasteboard.data(forType: .tiff) ?? pasteboard.data(forType: .png) {
                 captureImage(imageData)
@@ -125,7 +142,8 @@ class ClipboardManager: ObservableObject {
         lastCapturedText = text
         lastCapturedImageData = nil
         
-        let newClip = TextClip(text: text)
+        let appInfo = frontmostAppInfo
+        let newClip = TextClip(text: text, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID)
         
         DispatchQueue.main.async {
             self.clips.insert(.text(newClip), at: 0)
@@ -134,19 +152,40 @@ class ClipboardManager: ObservableObject {
     }
     
     // Capture image clip
-    private func captureImage(_ imageData: Data) {
+    private func captureImage(_ imageData: Data, originalFileName: String? = nil) {
         // Deduplicate consecutive identical images (basic comparison)
         guard imageData != lastCapturedImageData else { return }
         lastCapturedImageData = imageData
         lastCapturedText = nil
         
-        guard let imageClip = ImageClip(imageData: imageData) else {
+        let appInfo = frontmostAppInfo
+        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID, originalFileName: originalFileName) else {
             print("Failed to create image clip or image too large")
             return
         }
         
         DispatchQueue.main.async {
             self.clips.insert(.image(imageClip), at: 0)
+            self.enforceCapacity()
+        }
+    }
+    
+    // Capture file clip (non-image files like .dmg, .zip, .pdf, etc.)
+    private func captureFile(url: URL) {
+        // Deduplicate by path
+        let path = url.path
+        guard lastCapturedText != path else { return }
+        lastCapturedText = path
+        lastCapturedImageData = nil
+        
+        let appInfo = frontmostAppInfo
+        guard let fileClip = FileClip(url: url, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID) else {
+            print("Failed to create file clip for: \(url.lastPathComponent)")
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.clips.insert(.file(fileClip), at: 0)
             self.enforceCapacity()
         }
     }
@@ -235,6 +274,12 @@ class ClipboardManager: ObservableObject {
                 lastCapturedImageData = imageClip.imageData
                 lastChangeCount = pasteboard.changeCount
             }
+            
+        case .file(let fileClip):
+            let fileURL = URL(fileURLWithPath: fileClip.filePath)
+            pasteboard.writeObjects([fileURL as NSURL])
+            lastCapturedText = fileClip.filePath
+            lastChangeCount = pasteboard.changeCount
         }
     }
     
@@ -245,3 +290,4 @@ class ClipboardManager: ObservableObject {
         return pinned + unpinned
     }
 }
+
