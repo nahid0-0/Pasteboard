@@ -12,19 +12,13 @@
 
 [**Download**](#-download) · [**Features**](#-features) · [**Install**](#-installation) · [**Build**](#%EF%B8%8F-building-from-source) · [**Permissions**](#-permissions)
 
-</div>
-
 ---
 
 ## 📥 Download
 
-<div align="center">
-
 ### [⬇ Download Pasteboard.app](https://github.com/nahid0-0/Pasteboard/raw/main/build/Pasteboard.app.zip)
 
 `Apple Silicon` · `macOS 13.0 Ventura or later`
-
-</div>
 
 ---
 
@@ -101,8 +95,6 @@ open build/Pasteboard.app
 | **Screen Recording** | Detect and manage screenshots | ⚙️ Optional |
 
 ---
-
-<div align="center">
 
 **Made with ❤️ by [Nahid Rahman](https://github.com/nahid0-0)**
 
