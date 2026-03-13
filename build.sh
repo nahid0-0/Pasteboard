@@ -72,7 +72,7 @@ mkdir -p "$RESOURCES_DIR/Assets.xcassets"
 echo "APPL????" > "$CONTENTS_DIR/PkgInfo"
 
 echo "🔐 Signing app..."
-codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || echo "⚠️  Code signing skipped (optional)"
+codesign --force --deep --sign - --entitlements OmniClip/OmniClip.entitlements "$APP_BUNDLE" 2>/dev/null || echo "⚠️  Code signing skipped (optional)"
 
 echo "✅ Build complete!"
 echo "📍 App location: $APP_BUNDLE"

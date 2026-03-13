@@ -169,21 +169,35 @@ struct ImageClip: ClipItem {
     }
 }
 
-// File clip model - stores reference to file, not contents
+// File clip model - stores reference to file(s), not contents
 struct FileClip: ClipItem {
     let id: UUID
     let createdAt: Date
     var isPinned: Bool
-    let filePath: String
-    let fileName: String
-    let fileExtension: String
-    let fileSize: Int64
+    let filePaths: [String]
+    let fileNames: [String]
+    let fileExtensions: [String]
+    let totalFileSize: Int64
     let sourceAppName: String?
     let sourceAppBundleID: String?
     
-    // Cached file icon
-    let cachedFileIcon: NSImage
+    // Cached file icons (one per file)
+    let cachedFileIcons: [NSImage]
     
+    // Convenience: number of files
+    var fileCount: Int { filePaths.count }
+    var isSingleFile: Bool { filePaths.count == 1 }
+    
+    // Backward-compatible convenience properties
+    var fileName: String {
+        if isSingleFile { return fileNames.first ?? "Unknown" }
+        return "\(fileCount) files"
+    }
+    var filePath: String { filePaths.first ?? "" }
+    var fileExtension: String { fileExtensions.first ?? "" }
+    var cachedFileIcon: NSImage { cachedFileIcons.first ?? NSWorkspace.shared.icon(for: .data) }
+    
+    // Single-file init (backward compatible)
     init?(url: URL, sourceAppName: String? = nil, sourceAppBundleID: String? = nil) {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         
@@ -192,13 +206,36 @@ struct FileClip: ClipItem {
         self.id = UUID()
         self.createdAt = Date()
         self.isPinned = false
-        self.filePath = url.path
-        self.fileName = url.lastPathComponent
-        self.fileExtension = url.pathExtension.lowercased()
-        self.fileSize = (attributes?[.size] as? Int64) ?? 0
+        self.filePaths = [url.path]
+        self.fileNames = [url.lastPathComponent]
+        self.fileExtensions = [url.pathExtension.lowercased()]
+        self.totalFileSize = (attributes?[.size] as? Int64) ?? 0
         self.sourceAppName = sourceAppName
         self.sourceAppBundleID = sourceAppBundleID
-        self.cachedFileIcon = FileIconCache.shared.icon(for: url.pathExtension)
+        self.cachedFileIcons = [FileIconCache.shared.icon(for: url.pathExtension)]
+    }
+    
+    // Multi-file init
+    init?(urls: [URL], sourceAppName: String? = nil, sourceAppBundleID: String? = nil) {
+        let validURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !validURLs.isEmpty else { return nil }
+        
+        self.id = UUID()
+        self.createdAt = Date()
+        self.isPinned = false
+        self.filePaths = validURLs.map { $0.path }
+        self.fileNames = validURLs.map { $0.lastPathComponent }
+        self.fileExtensions = validURLs.map { $0.pathExtension.lowercased() }
+        self.sourceAppName = sourceAppName
+        self.sourceAppBundleID = sourceAppBundleID
+        self.cachedFileIcons = validURLs.map { FileIconCache.shared.icon(for: $0.pathExtension) }
+        
+        var total: Int64 = 0
+        for url in validURLs {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            total += (attrs?[.size] as? Int64) ?? 0
+        }
+        self.totalFileSize = total
     }
     
     static func == (lhs: FileClip, rhs: FileClip) -> Bool {
@@ -282,7 +319,7 @@ enum ClipType: Identifiable, Equatable {
         switch self {
         case .text(let clip): return clip.text.utf8.count
         case .image(let clip): return clip.imageData.count
-        case .file(let clip): return Int(clip.fileSize)
+        case .file(let clip): return Int(clip.totalFileSize)
         }
     }
     

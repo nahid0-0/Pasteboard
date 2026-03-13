@@ -18,6 +18,7 @@ struct ContentView: View {
     @ObservedObject var keyboardActions: KeyboardActionPublisher
     @ObservedObject var toolbarState: ToolbarState
     @State private var selectedClipID: UUID?
+    @State private var scrollOnNextSelection = false
     @State private var leftPanelWidth: CGFloat = 380
     @State private var dragStartWidth: CGFloat = 380
     
@@ -115,8 +116,9 @@ struct ContentView: View {
                         }
                         .scrollIndicators(.never)
                         .onChange(of: selectedClipID) { newID in
-                            if let id = newID {
-                                withAnimation(.easeInOut(duration: 0.15)) {
+                            if let id = newID, scrollOnNextSelection {
+                                scrollOnNextSelection = false
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                                     proxy.scrollTo(id, anchor: .center)
                                 }
                             }
@@ -248,8 +250,10 @@ struct ContentView: View {
         if let currentID = selectedClipID,
            let currentIndex = clips.firstIndex(where: { $0.id == currentID }) {
             let newIndex = max(0, min(clips.count - 1, currentIndex + offset))
+            scrollOnNextSelection = true
             selectedClipID = clips[newIndex].id
         } else {
+            scrollOnNextSelection = true
             selectedClipID = clips[0].id
         }
     }

@@ -400,25 +400,68 @@ struct PreviewPanel: View {
             .scrollIndicators(.never)
             
         case .file(let fileClip):
-            VStack(spacing: 16) {
-                Image(nsImage: fileClip.cachedFileIcon)
-                    .resizable()
-                    .frame(width: 64, height: 64)
-                
-                Text(fileClip.fileName)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.primary)
-                    .textSelection(.enabled)
-                
-                Text(fileClip.filePath)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.center)
+            if fileClip.isSingleFile {
+                VStack(spacing: 16) {
+                    Image(nsImage: fileClip.cachedFileIcon)
+                        .resizable()
+                        .frame(width: 64, height: 64)
+                    
+                    Text(fileClip.fileName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                    
+                    Text(fileClip.filePath)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(16)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.on.doc.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.accentColor)
+                        Text("\(fileClip.fileCount) files")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(Array(zip(fileClip.fileNames.indices, fileClip.fileNames)), id: \.0) { index, name in
+                                HStack(spacing: 8) {
+                                    Image(nsImage: fileClip.cachedFileIcons[index])
+                                        .resizable()
+                                        .frame(width: 20, height: 20)
+                                    
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(name)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(.primary)
+                                            .lineLimit(1)
+                                        Text(fileClip.filePaths[index])
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(16)
         }
     }
     
@@ -450,10 +493,20 @@ struct PreviewPanel: View {
             }
             
             if case .file(let fileClip) = clip {
+                if !fileClip.isSingleFile {
+                    Divider().padding(.leading, 12)
+                    detailRow(label: "Files", value: "\(fileClip.fileCount) items")
+                }
+                if fileClip.isSingleFile {
+                    Divider().padding(.leading, 12)
+                    detailRow(label: "Extension", value: fileClip.fileExtension.uppercased())
+                }
                 Divider().padding(.leading, 12)
-                detailRow(label: "Extension", value: fileClip.fileExtension.uppercased())
-                Divider().padding(.leading, 12)
-                detailRow(label: "Path", value: fileClip.filePath)
+                if fileClip.isSingleFile {
+                    detailRow(label: "Path", value: fileClip.filePath)
+                } else {
+                    detailRow(label: "Location", value: URL(fileURLWithPath: fileClip.filePaths.first ?? "").deletingLastPathComponent().path)
+                }
             }
         }
         .background(Color(NSColor.controlBackgroundColor).opacity(0.5))

@@ -20,8 +20,8 @@ class ClipboardManager: ObservableObject {
     }
     
     // Configuration
-    private let maxTotalItems = 20
-    private let maxUnpinnedItems = 15
+    private let maxTotalItems = 55
+    private let maxUnpinnedItems = 50
     private let maxPinnedItems = 5
     private let pollInterval: TimeInterval = 0.5
     
@@ -102,20 +102,31 @@ class ClipboardManager: ObservableObject {
         
         let imageExtensions = ["png", "jpg", "jpeg", "gif", "tiff", "bmp", "webp", "heic"]
         
-        // Check for file URLs first
-        if types.contains(.fileURL),
-           let urlString = pasteboard.string(forType: .fileURL),
-           let url = URL(string: urlString) {
-            let ext = url.pathExtension.lowercased()
+        // Check for file URLs first — read ALL pasteboard items
+        if types.contains(.fileURL) {
+            let items = pasteboard.pasteboardItems ?? []
+            var fileURLs: [URL] = []
+            for item in items {
+                if let urlString = item.string(forType: .fileURL),
+                   let url = URL(string: urlString) {
+                    fileURLs.append(url)
+                }
+            }
             
-            if imageExtensions.contains(ext),
-               let imageData = try? Data(contentsOf: url) {
-                // Image file - capture with filename
-                captureImage(imageData, originalFileName: url.lastPathComponent)
-                return
-            } else {
-                // Non-image file (dmg, zip, pdf, etc.) - capture as file reference
-                captureFile(url: url)
+            if fileURLs.count == 1, let url = fileURLs.first {
+                // Single file — existing behavior (check if image)
+                let ext = url.pathExtension.lowercased()
+                if imageExtensions.contains(ext),
+                   let imageData = try? Data(contentsOf: url) {
+                    captureImage(imageData, originalFileName: url.lastPathComponent)
+                    return
+                } else {
+                    captureFile(url: url)
+                    return
+                }
+            } else if fileURLs.count > 1 {
+                // Multiple files — capture as grouped clip
+                captureFiles(urls: fileURLs)
                 return
             }
         }
@@ -181,6 +192,26 @@ class ClipboardManager: ObservableObject {
         let appInfo = frontmostAppInfo
         guard let fileClip = FileClip(url: url, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID) else {
             print("Failed to create file clip for: \(url.lastPathComponent)")
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.clips.insert(.file(fileClip), at: 0)
+            self.enforceCapacity()
+        }
+    }
+    
+    // Capture multiple files as a single grouped clip
+    private func captureFiles(urls: [URL]) {
+        // Deduplicate by sorted paths
+        let sortedPaths = urls.map { $0.path }.sorted().joined(separator: "\n")
+        guard lastCapturedText != sortedPaths else { return }
+        lastCapturedText = sortedPaths
+        lastCapturedImageData = nil
+        
+        let appInfo = frontmostAppInfo
+        guard let fileClip = FileClip(urls: urls, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID) else {
+            print("Failed to create multi-file clip")
             return
         }
         
@@ -276,9 +307,9 @@ class ClipboardManager: ObservableObject {
             }
             
         case .file(let fileClip):
-            let fileURL = URL(fileURLWithPath: fileClip.filePath)
-            pasteboard.writeObjects([fileURL as NSURL])
-            lastCapturedText = fileClip.filePath
+            let fileURLs = fileClip.filePaths.map { URL(fileURLWithPath: $0) as NSURL }
+            pasteboard.writeObjects(fileURLs)
+            lastCapturedText = fileClip.filePaths.sorted().joined(separator: "\n")
             lastChangeCount = pasteboard.changeCount
         }
     }

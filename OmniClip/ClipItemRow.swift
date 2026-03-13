@@ -154,9 +154,16 @@ struct ClipItemRow: View, Equatable {
             
         case .file(let fileClip):
             HStack(spacing: 6) {
-                Image(nsImage: fileClip.cachedFileIcon)
-                    .resizable()
-                    .frame(width: 24, height: 24)
+                if fileClip.isSingleFile {
+                    Image(nsImage: fileClip.cachedFileIcon)
+                        .resizable()
+                        .frame(width: 24, height: 24)
+                } else {
+                    Image(systemName: "doc.on.doc.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                        .frame(width: 24, height: 24)
+                }
                 Text(fileClip.fileName)
                     .font(.system(size: 11))
                     .foregroundColor(.primary)
