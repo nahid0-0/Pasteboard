@@ -9,7 +9,7 @@ class ToolbarState: ObservableObject {
     @Published var clipCount: Int = 0
     @Published var isPopoverMode: Bool = false
     
-    let typeFilterOptions = ["All", "Text", "Image", "URL", "File"]
+    let typeFilterOptions = ["All", "Text", "Image", "URL", "File", "Stack"]
 }
 
 struct ContentView: View {
@@ -22,9 +22,14 @@ struct ContentView: View {
     @State private var leftPanelWidth: CGFloat = 380
     @State private var dragStartWidth: CGFloat = 380
     
+    // O(1) lookup for selected clip
+    private var clipsByID: [UUID: ClipType] {
+        Dictionary(uniqueKeysWithValues: clipboardManager.clips.map { ($0.id, $0) })
+    }
+    
     var selectedClip: ClipType? {
         guard let id = selectedClipID else { return nil }
-        return clipboardManager.clips.first { $0.id == id }
+        return clipsByID[id]
     }
     
     var filteredClips: [ClipType] {
@@ -41,6 +46,8 @@ struct ContentView: View {
             typeFiltered = clips.filter { $0.dataType == .url }
         case "File":
             typeFiltered = clips.filter { $0.dataType == .file }
+        case "Stack":
+            typeFiltered = clips.filter { $0.dataType == .stack }
         default:
             typeFiltered = clips
         }
@@ -58,6 +65,13 @@ struct ContentView: View {
                 return false
             case .file(let fileClip):
                 return fileClip.fileName.localizedCaseInsensitiveContains(toolbarState.searchText)
+            case .stack(let set):
+                return set.items.contains { item in
+                    if case .text(let t) = item {
+                        return t.text.localizedCaseInsensitiveContains(toolbarState.searchText)
+                    }
+                    return false
+                }
             }
         }
     }
@@ -66,7 +80,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // Show inline toolbar in popover mode (no titlebar accessory)
             if toolbarState.isPopoverMode {
-                TitlebarToolbarView(toolbarState: toolbarState)
+                TitlebarToolbarView(toolbarState: toolbarState, clipboardManager: clipboardManager)
                     .padding(.horizontal, 6)
                     .frame(height: 36)
                     .background(Color(NSColor.controlBackgroundColor))
@@ -275,12 +289,22 @@ extension Notification.Name {
 
 struct TitlebarToolbarView: View {
     @ObservedObject var toolbarState: ToolbarState
+    @ObservedObject var clipboardManager: ClipboardManager
     
     var body: some View {
         HStack(spacing: 6) {
             // Search field
             SearchField(text: $toolbarState.searchText, isFocused: $toolbarState.searchFieldFocused)
                 .frame(maxWidth: .infinity)
+            
+            // Stack toggle button
+            Button(action: { clipboardManager.toggleStackMode() }) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 13))
+                    .foregroundColor(clipboardManager.isStackMode ? .accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(clipboardManager.isStackMode ? "Stop Stacking" : "Start Stacking")
             
             // Filter pills
             ForEach(toolbarState.typeFilterOptions, id: \.self) { option in

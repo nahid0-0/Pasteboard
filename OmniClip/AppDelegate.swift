@@ -19,8 +19,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var settingsObserver: AnyCancellable?
     private var hotkeyObservers: [AnyCancellable] = []
     private var hotKeyRef: EventHotKeyRef?
+    private var stackModeHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private var keyMonitor: Any?
+    private var stackModeObserver: AnyCancellable?
     
     // Shared with ContentView
     let keyboardActions = KeyboardActionPublisher()
@@ -45,6 +47,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.action = #selector(statusItemClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        
+        // Observe stack mode to show/hide blue dot on status bar icon
+        stackModeObserver = clipboardManager.$isStackMode.sink { [weak self] isActive in
+            guard let self = self, let button = self.statusItem.button else { return }
+            let dotID = "stackModeDot"
+            if isActive {
+                if button.subviews.first(where: { $0.accessibilityIdentifier() == dotID }) == nil {
+                    let dot = NSView(frame: NSRect(x: button.bounds.width - 8, y: 6, width: 6, height: 6))
+                    dot.wantsLayer = true
+                    dot.layer?.backgroundColor = NSColor.systemBlue.cgColor
+                    dot.layer?.cornerRadius = 3
+                    dot.setAccessibilityIdentifier(dotID)
+                    dot.autoresizingMask = [.minXMargin, .minYMargin]
+                    button.addSubview(dot)
+                }
+            } else {
+                button.subviews.first(where: { $0.accessibilityIdentifier() == dotID })?.removeFromSuperview()
+            }
         }
         
         let popoverContentView = ContentView(
@@ -88,15 +109,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         // Embed toolbar in the titlebar row
         let titlebarAccessory = NSTitlebarAccessoryViewController()
-        let toolbarView = TitlebarToolbarView(toolbarState: toolbarState)
+        let toolbarView = TitlebarToolbarView(toolbarState: toolbarState, clipboardManager: clipboardManager)
         titlebarAccessory.view = NSHostingView(rootView: toolbarView)
         titlebarAccessory.layoutAttribute = .bottom
         panel.addTitlebarAccessoryViewController(titlebarAccessory)
         
-        // Register global hotkey from settings
-        if appSettings.keyboardModeEnabled {
-            registerGlobalHotKey()
-        }
+        // Register global hotkeys from settings
+        registerGlobalHotKey()
         
         // Watch for hotkey setting changes
         observeHotkeySettings()
@@ -124,24 +143,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Hotkey Settings Observers
     
     private func observeHotkeySettings() {
-        let keyCodeObs = appSettings.$toggleHotkeyKeyCode.dropFirst().sink { [weak self] _ in
-            self?.reregisterHotKey()
-        }
-        let modObs = appSettings.$toggleHotkeyModifiers.dropFirst().sink { [weak self] _ in
-            self?.reregisterHotKey()
-        }
-        let enabledObs = appSettings.$keyboardModeEnabled.dropFirst().sink { [weak self] enabled in
-            if enabled {
-                self?.registerGlobalHotKey()
-            } else {
-                self?.unregisterGlobalHotKey()
-            }
-        }
-        hotkeyObservers = [keyCodeObs, modObs, enabledObs]
+        let keyCodeObs = appSettings.$toggleHotkeyKeyCode.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        let modObs = appSettings.$toggleHotkeyModifiers.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        let enabledObs = appSettings.$keyboardModeEnabled.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        
+        let stackKeyCodeObs = appSettings.$stackModeHotkeyKeyCode.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        let stackModObs = appSettings.$stackModeHotkeyModifiers.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        let stackEnabledObs = appSettings.$stackModeHotkeyEnabled.dropFirst().sink { [weak self] _ in self?.reregisterHotKey() }
+        
+        hotkeyObservers = [keyCodeObs, modObs, enabledObs, stackKeyCodeObs, stackModObs, stackEnabledObs]
     }
     
     private func reregisterHotKey() {
-        guard appSettings.keyboardModeEnabled else { return }
         unregisterGlobalHotKey()
         registerGlobalHotKey()
     }
@@ -223,37 +236,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Global Hotkey
     
     private func registerGlobalHotKey() {
-        let keyCode = appSettings.toggleHotkeyKeyCode
-        let modifiers = appSettings.toggleHotkeyModifiers
+        let needsHandler = appSettings.keyboardModeEnabled || appSettings.stackModeHotkeyEnabled
+        guard needsHandler else { return }
         
-        var hotKeyID = EventHotKeyID()
-        hotKeyID.signature = OSType(0x4F43_4C50)
-        hotKeyID.id = 1
+        if eventHandlerRef == nil {
+            var eventType = EventTypeSpec()
+            eventType.eventClass = OSType(kEventClassKeyboard)
+            eventType.eventKind = UInt32(kEventHotKeyPressed)
+            
+            var handlerRef: EventHandlerRef?
+            let status = InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_, event, userData) -> OSStatus in
+                    guard let userData = userData, let event = event else { return OSStatus(eventNotHandledErr) }
+                    let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+                    
+                    var hotKeyID = EventHotKeyID()
+                    let err = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+                    
+                    let id = (err == noErr) ? hotKeyID.id : 1
+                    
+                    DispatchQueue.main.async {
+                        if id == 1 {
+                            delegate.handleGlobalHotKey()
+                        } else if id == 2 {
+                            delegate.handleStackModeHotKey()
+                        }
+                    }
+                    return noErr
+                },
+                1,
+                &eventType,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &handlerRef
+            )
+            
+            if status == noErr {
+                eventHandlerRef = handlerRef
+            }
+        }
         
-        var eventType = EventTypeSpec()
-        eventType.eventClass = OSType(kEventClassKeyboard)
-        eventType.eventKind = UInt32(kEventHotKeyPressed)
+        if appSettings.keyboardModeEnabled {
+            var hotKeyID = EventHotKeyID()
+            hotKeyID.signature = OSType(0x4F43_4C50)
+            hotKeyID.id = 1
+            RegisterEventHotKey(appSettings.toggleHotkeyKeyCode, appSettings.toggleHotkeyModifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        }
         
-        var handlerRef: EventHandlerRef?
-        let status = InstallEventHandler(
-            GetApplicationEventTarget(),
-            { (_, event, userData) -> OSStatus in
-                guard let userData = userData else { return OSStatus(eventNotHandledErr) }
-                let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-                DispatchQueue.main.async {
-                    delegate.handleGlobalHotKey()
-                }
-                return noErr
-            },
-            1,
-            &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &handlerRef
-        )
-        
-        if status == noErr {
-            eventHandlerRef = handlerRef
-            RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        if appSettings.stackModeHotkeyEnabled {
+            var stackModeID = EventHotKeyID()
+            stackModeID.signature = OSType(0x4F43_4C50)
+            stackModeID.id = 2
+            RegisterEventHotKey(appSettings.stackModeHotkeyKeyCode, appSettings.stackModeHotkeyModifiers, stackModeID, GetApplicationEventTarget(), 0, &stackModeHotKeyRef)
         }
     }
     
@@ -262,10 +296,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
+        if let stackModeHotKeyRef = stackModeHotKeyRef {
+            UnregisterEventHotKey(stackModeHotKeyRef)
+            self.stackModeHotKeyRef = nil
+        }
         if let handlerRef = eventHandlerRef {
             RemoveEventHandler(handlerRef)
             self.eventHandlerRef = nil
         }
+    }
+    
+    @objc func handleStackModeHotKey() {
+        clipboardManager.toggleStackMode()
     }
     
     @objc func handleGlobalHotKey() {

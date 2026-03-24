@@ -8,6 +8,7 @@ enum ClipDataType: String {
     case url = "URL"
     case image = "Image"
     case file = "File"
+    case stack = "Stack"
 }
 
 // Static cache for app icons to avoid repeated filesystem lookups
@@ -243,17 +244,73 @@ struct FileClip: ClipItem {
     }
 }
 
+// Stack set model — groups multiple clips into a single item
+struct StackSet: ClipItem {
+    let id: UUID
+    let createdAt: Date
+    var isPinned: Bool
+    var items: [ClipType]
+    var isAccepting: Bool  // true = actively stacking, false = finalized
+    
+    var sourceAppName: String? {
+        items.first?.sourceAppName
+    }
+    var sourceAppBundleID: String? {
+        items.first?.sourceAppBundleID
+    }
+    
+    init(items: [ClipType] = [], isAccepting: Bool = true) {
+        self.id = UUID()
+        self.createdAt = Date()
+        self.isPinned = false
+        self.items = items
+        self.isAccepting = isAccepting
+    }
+    
+    var itemCount: Int { items.count }
+    
+    /// Combined text of all text items, joined by newlines
+    var combinedText: String {
+        items.compactMap { item -> String? in
+            if case .text(let t) = item { return t.text }
+            return nil
+        }.joined(separator: "\n")
+    }
+    
+    /// All file paths from file items
+    var allFilePaths: [String] {
+        items.flatMap { item -> [String] in
+            if case .file(let f) = item { return f.filePaths }
+            return []
+        }
+    }
+    
+    /// First image clip if any
+    var firstImageClip: ImageClip? {
+        for item in items {
+            if case .image(let img) = item { return img }
+        }
+        return nil
+    }
+    
+    static func == (lhs: StackSet, rhs: StackSet) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 // Unified container for all types
 enum ClipType: Identifiable, Equatable {
     case text(TextClip)
     case image(ImageClip)
     case file(FileClip)
+    case stack(StackSet)
     
     var id: UUID {
         switch self {
         case .text(let clip): return clip.id
         case .image(let clip): return clip.id
         case .file(let clip): return clip.id
+        case .stack(let set): return set.id
         }
     }
     
@@ -262,6 +319,7 @@ enum ClipType: Identifiable, Equatable {
         case .text(let clip): return clip.createdAt
         case .image(let clip): return clip.createdAt
         case .file(let clip): return clip.createdAt
+        case .stack(let set): return set.createdAt
         }
     }
     
@@ -271,6 +329,7 @@ enum ClipType: Identifiable, Equatable {
             case .text(let clip): return clip.isPinned
             case .image(let clip): return clip.isPinned
             case .file(let clip): return clip.isPinned
+            case .stack(let set): return set.isPinned
             }
         }
         set {
@@ -284,6 +343,9 @@ enum ClipType: Identifiable, Equatable {
             case .file(var clip):
                 clip.isPinned = newValue
                 self = .file(clip)
+            case .stack(var set):
+                set.isPinned = newValue
+                self = .stack(set)
             }
         }
     }
@@ -293,6 +355,7 @@ enum ClipType: Identifiable, Equatable {
         case .text(let clip): return clip.sourceAppName
         case .image(let clip): return clip.sourceAppName
         case .file(let clip): return clip.sourceAppName
+        case .stack(let set): return set.sourceAppName
         }
     }
     
@@ -301,6 +364,7 @@ enum ClipType: Identifiable, Equatable {
         case .text(let clip): return clip.sourceAppBundleID
         case .image(let clip): return clip.sourceAppBundleID
         case .file(let clip): return clip.sourceAppBundleID
+        case .stack(let set): return set.sourceAppBundleID
         }
     }
     
@@ -312,6 +376,8 @@ enum ClipType: Identifiable, Equatable {
             return .image
         case .file:
             return .file
+        case .stack:
+            return .stack
         }
     }
     
@@ -320,6 +386,7 @@ enum ClipType: Identifiable, Equatable {
         case .text(let clip): return clip.text.utf8.count
         case .image(let clip): return clip.imageData.count
         case .file(let clip): return Int(clip.totalFileSize)
+        case .stack(let set): return set.items.reduce(0) { $0 + $1.dataSize }
         }
     }
     

@@ -40,6 +40,20 @@ class AppSettings: ObservableObject {
         }
     }
     
+    // Stack mode toggle hotkey (default: Cmd+Shift+D, disabled by default)
+    @Published var stackModeHotkeyEnabled: Bool {
+        didSet { UserDefaults.standard.set(stackModeHotkeyEnabled, forKey: "stackModeHotkeyEnabled") }
+    }
+    @Published var stackModeHotkeyKeyCode: UInt32 {
+        didSet { UserDefaults.standard.set(stackModeHotkeyKeyCode, forKey: "stackModeHotkeyKeyCode") }
+    }
+    @Published var stackModeHotkeyModifiers: UInt32 {
+        didSet { UserDefaults.standard.set(stackModeHotkeyModifiers, forKey: "stackModeHotkeyModifiers") }
+    }
+    @Published var stackModeHotkeyDisplay: String {
+        didSet { UserDefaults.standard.set(stackModeHotkeyDisplay, forKey: "stackModeHotkeyDisplay") }
+    }
+    
     // Toggle hotkey (default: Cmd+Shift+J)
     @Published var toggleHotkeyKeyCode: UInt32 {
         didSet {
@@ -100,6 +114,10 @@ class AppSettings: ObservableObject {
     static let defaultNavUpModifiers: UInt = NSEvent.ModifierFlags.shift.rawValue
     static let defaultNavUpDisplay = "⇧↑"
     
+    static let defaultStackModeKeyCode: UInt32 = 2  // D
+    static let defaultStackModeModifiers: UInt32 = UInt32(cmdKey | shiftKey)
+    static let defaultStackModeDisplay = "⌘⇧D"
+    
     static let defaultNavDownKeyCode: UInt16 = 125 // Down arrow
     static let defaultNavDownModifiers: UInt = NSEvent.ModifierFlags.shift.rawValue
     static let defaultNavDownDisplay = "⇧↓"
@@ -124,6 +142,20 @@ class AppSettings: ObservableObject {
         // Keyboard shortcuts
         self.keyboardModeEnabled = UserDefaults.standard.object(forKey: "keyboardModeEnabled") != nil
             ? UserDefaults.standard.bool(forKey: "keyboardModeEnabled") : true
+            
+        self.stackModeHotkeyEnabled = UserDefaults.standard.object(forKey: "stackModeHotkeyEnabled") != nil
+            ? UserDefaults.standard.bool(forKey: "stackModeHotkeyEnabled") : false
+            
+        self.stackModeHotkeyKeyCode = UserDefaults.standard.object(forKey: "stackModeHotkeyKeyCode") != nil
+            ? UInt32(UserDefaults.standard.integer(forKey: "stackModeHotkeyKeyCode"))
+            : AppSettings.defaultStackModeKeyCode
+        
+        self.stackModeHotkeyModifiers = UserDefaults.standard.object(forKey: "stackModeHotkeyModifiers") != nil
+            ? UInt32(UserDefaults.standard.integer(forKey: "stackModeHotkeyModifiers"))
+            : AppSettings.defaultStackModeModifiers
+        
+        self.stackModeHotkeyDisplay = UserDefaults.standard.string(forKey: "stackModeHotkeyDisplay")
+            ?? AppSettings.defaultStackModeDisplay
         
         self.toggleHotkeyKeyCode = UserDefaults.standard.object(forKey: "toggleHotkeyKeyCode") != nil
             ? UInt32(UserDefaults.standard.integer(forKey: "toggleHotkeyKeyCode"))
@@ -164,6 +196,10 @@ class AppSettings: ObservableObject {
         toggleHotkeyKeyCode = AppSettings.defaultToggleKeyCode
         toggleHotkeyModifiers = AppSettings.defaultToggleModifiers
         toggleHotkeyDisplay = AppSettings.defaultToggleDisplay
+        stackModeHotkeyEnabled = false
+        stackModeHotkeyKeyCode = AppSettings.defaultStackModeKeyCode
+        stackModeHotkeyModifiers = AppSettings.defaultStackModeModifiers
+        stackModeHotkeyDisplay = AppSettings.defaultStackModeDisplay
         navUpKeyCode = AppSettings.defaultNavUpKeyCode
         navUpModifiers = AppSettings.defaultNavUpModifiers
         navUpDisplay = AppSettings.defaultNavUpDisplay

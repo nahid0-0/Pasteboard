@@ -72,6 +72,23 @@ struct SettingsView: View {
                     .disabled(!settings.keyboardModeEnabled)
                     .opacity(settings.keyboardModeEnabled ? 1 : 0.5)
                     
+                    Toggle("Enable stack mode hotkey", isOn: $settings.stackModeHotkeyEnabled)
+                        .toggleStyle(.checkbox)
+                        .padding(.top, 4)
+                    
+                    ShortcutRecorderRow(
+                        label: "Toggle Stack Mode",
+                        displayString: $settings.stackModeHotkeyDisplay,
+                        isGlobalHotkey: true,
+                        onRecord: { keyCode, modifiers in
+                            settings.stackModeHotkeyKeyCode = UInt32(keyCode)
+                            settings.stackModeHotkeyModifiers = AppSettings.carbonModifiers(from: modifiers)
+                            settings.stackModeHotkeyDisplay = AppSettings.displayString(for: keyCode, modifiers: modifiers)
+                        }
+                    )
+                    .disabled(!settings.stackModeHotkeyEnabled)
+                    .opacity(settings.stackModeHotkeyEnabled ? 1 : 0.5)
+                    
                     ShortcutRecorderRow(
                         label: "Navigate Up",
                         displayString: $settings.navUpDisplay,

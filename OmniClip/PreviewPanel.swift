@@ -462,6 +462,72 @@ struct PreviewPanel: View {
                     .scrollIndicators(.never)
                 }
             }
+        
+        case .stack(let set):
+            VStack(alignment: .leading, spacing: 0) {
+                // Slim header
+                HStack(spacing: 8) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(set.isAccepting ? .accentColor : .secondary)
+                    Text("Stack · \(set.itemCount) items")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.primary)
+                    if set.isAccepting {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                
+                Divider().padding(.horizontal, 16)
+                
+                // Items
+                if set.items.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 28))
+                            .foregroundColor(.secondary)
+                        Text("Copy items to stack them here")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ZStack(alignment: .bottomTrailing) {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(spacing: 6) {
+                                    Color.clear.frame(height: 0).id("stackTop")
+                                    ForEach(Array(set.items.enumerated()), id: \.offset) { index, item in
+                                        StackItemCard(item: item, index: index)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                            }
+                            .scrollIndicators(.never)
+                            .overlay(alignment: .bottomTrailing) {
+                                Button(action: {
+                                    withAnimation(.easeOut(duration: 0.3)) {
+                                        proxy.scrollTo("stackTop", anchor: .top)
+                                    }
+                                }) {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.accentColor)
+                                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(10)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -508,6 +574,17 @@ struct PreviewPanel: View {
                     detailRow(label: "Location", value: URL(fileURLWithPath: fileClip.filePaths.first ?? "").deletingLastPathComponent().path)
                 }
             }
+            
+            if case .stack(let set) = clip {
+                Divider().padding(.leading, 12)
+                detailRow(label: "Items", value: "\(set.itemCount) stacked")
+                Divider().padding(.leading, 12)
+                let byteFormatter = ByteCountFormatter()
+                let totalSize = set.items.reduce(0) { $0 + $1.dataSize }
+                detailRow(label: "Total Size", value: byteFormatter.string(fromByteCount: Int64(totalSize)))
+                Divider().padding(.leading, 12)
+                detailRow(label: "Status", value: set.isAccepting ? "Stacking..." : "Finalized")
+            }
         }
         .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
     }
@@ -537,6 +614,25 @@ struct PreviewPanel: View {
     private var actionBar: some View {
         HStack(spacing: 8) {
             Spacer()
+            
+            // Stack More button (only for finalized stacks)
+            if case .stack(let set) = clip, !set.isAccepting {
+                Button(action: {
+                    clipboardManager.resumeStacking(setID: clip.id)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.square.on.square")
+                            .font(.system(size: 10))
+                        Text("Stack More")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.accentColor.opacity(0.12))
+                .cornerRadius(5)
+            }
             
             Button(action: {
                 clipboardManager.togglePin(for: clip.id)
@@ -592,9 +688,221 @@ struct PreviewPanel: View {
         .background(Color(NSColor.controlBackgroundColor))
     }
     
+    private static let byteFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        return f
+    }()
+    
     private func formatBytes(_ bytes: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(bytes))
+        Self.byteFormatter.string(fromByteCount: Int64(bytes))
+    }
+}
+
+// MARK: - Stack Item Card (expandable card for each item in a stack)
+
+struct StackItemCard: View {
+    let item: ClipType
+    let index: Int
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Collapsed header — always visible
+            Button(action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(alignment: .top, spacing: 10) {
+                    // Index
+                    Text("\(index + 1)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Color.accentColor.opacity(0.8))
+                        .clipShape(Circle())
+                        .padding(.top, 2)
+                    
+                    // Item type icon + compact preview
+                    itemSummary
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    // Type badge
+                    Text(itemTypeLabel)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.1))
+                        .cornerRadius(3)
+                        .padding(.top, 2)
+                    
+                    // Chevron
+                    Image(systemName: isExpanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                        .padding(.top, 3)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            
+            // Expanded content
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, 10)
+                
+                expandedContent
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - Compact Summary (collapsed)
+    
+    @ViewBuilder
+    private var itemSummary: some View {
+        switch item {
+        case .text(let t):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: t.isURL ? "link" : "doc.text")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Text(t.isURL ? "URL" : "Text")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.primary)
+                }
+                Text(t.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+            }
+        case .image(let img):
+            HStack(spacing: 6) {
+                if let thumb = img.thumbnail() {
+                    Image(nsImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 24, height: 24)
+                        .cornerRadius(4)
+                        .clipped()
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                }
+                Text(img.displayName)
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary)
+            }
+        case .file(let f):
+            HStack(spacing: 6) {
+                if f.isSingleFile {
+                    Image(nsImage: f.cachedFileIcon)
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                } else {
+                    Image(systemName: "doc.on.doc.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(f.fileName)
+                        .font(.system(size: 11))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    if !f.isSingleFile {
+                        Text("\(f.fileCount) files")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        case .stack:
+            EmptyView() // Stacks shouldn't be inside stacks
+        }
+    }
+    
+
+    // MARK: - Expanded Content
+    
+    @ViewBuilder
+    private var expandedContent: some View {
+        switch item {
+        case .text(let t):
+            let truncated = String(t.text.prefix(2000))
+            Text(truncated + (t.text.count > 2000 ? "\n… (\(t.text.count) chars total)" : ""))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(NSColor.textBackgroundColor))
+                )
+        case .image(let img):
+            VStack(spacing: 6) {
+                if let fullImage = img.fullImage() {
+                    Image(nsImage: fullImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 200)
+                        .cornerRadius(6)
+                }
+                Text("\(img.width) × \(img.height) px")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        case .file(let f):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(nsImage: f.cachedFileIcon)
+                        .resizable()
+                        .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(f.fileName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.primary)
+                        Text(f.filePath)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .stack:
+            Text("Nested stack")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var itemTypeLabel: String {
+        switch item {
+        case .text(let t): return t.isURL ? "URL" : "Text"
+        case .image: return "Image"
+        case .file: return "File"
+        case .stack: return "Stack"
+        }
     }
 }

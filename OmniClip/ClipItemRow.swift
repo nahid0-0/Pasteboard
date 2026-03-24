@@ -9,9 +9,15 @@ struct ClipItemRow: View, Equatable {
     
     @State private var isHovering = false
     
-    private let relativeDateFormatter: RelativeDateTimeFormatter = {
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .abbreviated
+        return f
+    }()
+    
+    private static let byteFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
         return f
     }()
     
@@ -64,7 +70,7 @@ struct ClipItemRow: View, Equatable {
                     // Time chip
                     metadataChip(
                         icon: "clock",
-                        text: relativeDateFormatter.localizedString(for: clip.createdAt, relativeTo: Date())
+                        text: Self.relativeDateFormatter.localizedString(for: clip.createdAt, relativeTo: Date())
                     )
                     
                     // Type chip
@@ -108,6 +114,7 @@ struct ClipItemRow: View, Equatable {
         case .url: return "link"
         case .image: return "photo"
         case .file: return "doc"
+        case .stack: return "square.stack.3d.up.fill"
         }
     }
     
@@ -169,12 +176,30 @@ struct ClipItemRow: View, Equatable {
                     .foregroundColor(.primary)
                     .lineLimit(1)
             }
+            
+        case .stack(let set):
+            HStack(spacing: 6) {
+                ZStack {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(set.isAccepting ? .accentColor : .secondary)
+                        .frame(width: 24, height: 24)
+                    if set.isAccepting {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 10, y: -10)
+                    }
+                }
+                Text("Stack (\(set.itemCount) items)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            }
         }
     }
     
     private func formatBytes(_ bytes: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(bytes))
+        Self.byteFormatter.string(fromByteCount: Int64(bytes))
     }
 }

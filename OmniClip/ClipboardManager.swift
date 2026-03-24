@@ -3,15 +3,25 @@ import AppKit
 import Combine
 
 class ClipboardManager: ObservableObject {
-    @Published var clips: [ClipType] = []
+    @Published var clips: [ClipType] = [] {
+        didSet { _cachedSortedClips = nil }
+    }
+    
+    // Stack mode state
+    @Published var isStackMode: Bool = false
+    private var activeStackID: UUID?
+    
+    // Cached sorted clips — invalidated when clips changes
+    private var _cachedSortedClips: [ClipType]?
     
     private var lastChangeCount: Int
-    private var timer: Timer?
+    private var pollTimer: DispatchSourceTimer?
     private var lastCapturedText: String?
     private var lastCapturedImageData: Data?
     private var screenshotWatcher: ScreenshotWatcher?
     private var settingsObserver: AnyCancellable?
     private var ignoreNextClipboardChange: Bool = false
+    private let pollQueue = DispatchQueue(label: "com.omniclip.clipboard-poll", qos: .userInitiated)
     
     // Get the frontmost app info at capture time
     private var frontmostAppInfo: (name: String?, bundleID: String?) {
@@ -23,7 +33,7 @@ class ClipboardManager: ObservableObject {
     private let maxTotalItems = 55
     private let maxUnpinnedItems = 50
     private let maxPinnedItems = 5
-    private let pollInterval: TimeInterval = 0.5
+    private let pollInterval: Double = 0.5
     
     init() {
         self.lastChangeCount = NSPasteboard.general.changeCount
@@ -34,16 +44,20 @@ class ClipboardManager: ObservableObject {
         stopMonitoring()
     }
     
-    // Start clipboard monitoring
+    // Start clipboard monitoring on a background queue
     func startMonitoring() {
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
+        timer.schedule(deadline: .now(), repeating: pollInterval)
+        timer.setEventHandler { [weak self] in
             self?.checkClipboard()
         }
+        pollTimer = timer
+        timer.resume()
     }
     
     func stopMonitoring() {
-        timer?.invalidate()
-        timer = nil
+        pollTimer?.cancel()
+        pollTimer = nil
         screenshotWatcher?.stopWatching()
     }
     
@@ -84,8 +98,9 @@ class ClipboardManager: ObservableObject {
         }
     }
     
-    // Check for clipboard changes
+    // Check for clipboard changes (runs on background pollQueue)
     private func checkClipboard() {
+        // changeCount is thread-safe
         let currentChangeCount = NSPasteboard.general.changeCount
         
         guard currentChangeCount != lastChangeCount else { return }
@@ -97,6 +112,7 @@ class ClipboardManager: ObservableObject {
             return
         }
         
+        // Read pasteboard on the current background thread
         let pasteboard = NSPasteboard.general
         let types = pasteboard.types ?? []
         
@@ -155,9 +171,11 @@ class ClipboardManager: ObservableObject {
         
         let appInfo = frontmostAppInfo
         let newClip = TextClip(text: text, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID)
+        let clipType = ClipType.text(newClip)
         
         DispatchQueue.main.async {
-            self.clips.insert(.text(newClip), at: 0)
+            if self.appendToActiveStackIfNeeded(clipType) { return }
+            self.clips.insert(clipType, at: 0)
             self.enforceCapacity()
         }
     }
@@ -174,9 +192,11 @@ class ClipboardManager: ObservableObject {
             print("Failed to create image clip or image too large")
             return
         }
+        let clipType = ClipType.image(imageClip)
         
         DispatchQueue.main.async {
-            self.clips.insert(.image(imageClip), at: 0)
+            if self.appendToActiveStackIfNeeded(clipType) { return }
+            self.clips.insert(clipType, at: 0)
             self.enforceCapacity()
         }
     }
@@ -194,9 +214,11 @@ class ClipboardManager: ObservableObject {
             print("Failed to create file clip for: \(url.lastPathComponent)")
             return
         }
+        let clipType = ClipType.file(fileClip)
         
         DispatchQueue.main.async {
-            self.clips.insert(.file(fileClip), at: 0)
+            if self.appendToActiveStackIfNeeded(clipType) { return }
+            self.clips.insert(clipType, at: 0)
             self.enforceCapacity()
         }
     }
@@ -214,48 +236,89 @@ class ClipboardManager: ObservableObject {
             print("Failed to create multi-file clip")
             return
         }
+        let clipType = ClipType.file(fileClip)
         
         DispatchQueue.main.async {
-            self.clips.insert(.file(fileClip), at: 0)
+            if self.appendToActiveStackIfNeeded(clipType) { return }
+            self.clips.insert(clipType, at: 0)
             self.enforceCapacity()
         }
     }
     
-    // Enforce capacity limits (ring buffer with pin protection)
-    private func enforceCapacity() {
-        let pinnedCount = clips.filter { $0.isPinned }.count
-        let unpinnedCount = clips.count - pinnedCount
+    // MARK: - Stack Mode
+    
+    /// Append a clip to the active stack set. Returns true if handled.
+    private func appendToActiveStackIfNeeded(_ clip: ClipType) -> Bool {
+        guard isStackMode, let stackID = activeStackID,
+              let index = clips.firstIndex(where: { $0.id == stackID }),
+              case .stack(var set) = clips[index], set.isAccepting else {
+            return false
+        }
+        set.items.append(clip)
+        clips[index] = .stack(set)
+        return true
+    }
+    
+    /// Toggle stack mode on/off
+    func toggleStackMode() {
+        if isStackMode {
+            // Turn OFF — finalize the active stack
+            if let stackID = activeStackID,
+               let index = clips.firstIndex(where: { $0.id == stackID }),
+               case .stack(var set) = clips[index] {
+                set.isAccepting = false
+                clips[index] = .stack(set)
+            }
+            activeStackID = nil
+            isStackMode = false
+        } else {
+            // Turn ON — create a new stack set
+            let newSet = StackSet()
+            clips.insert(.stack(newSet), at: 0)
+            activeStackID = newSet.id
+            isStackMode = true
+        }
+    }
+    
+    /// Resume stacking into an existing finalized set
+    func resumeStacking(setID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == setID }),
+              case .stack(var set) = clips[index] else { return }
         
-        // Remove oldest unpinned items if over limit
-        // Newest items are at index 0, oldest at the end — remove from the end
-        if unpinnedCount > maxUnpinnedItems {
-            let itemsToRemove = unpinnedCount - maxUnpinnedItems
-            var removed = 0
-            var indicesToRemove: [Int] = []
-            
-            // Iterate from the end (oldest) to find unpinned items to evict
-            for i in stride(from: clips.count - 1, through: 0, by: -1) {
-                if removed >= itemsToRemove { break }
-                if !clips[i].isPinned {
-                    indicesToRemove.append(i)
-                    removed += 1
-                }
-            }
-            
-            // Remove in reverse-sorted order to keep indices valid
-            for index in indicesToRemove.sorted().reversed() {
-                clips.remove(at: index)
-            }
+        // Finalize any currently active stack first
+        if let currentID = activeStackID,
+           let currentIndex = clips.firstIndex(where: { $0.id == currentID }),
+           case .stack(var currentSet) = clips[currentIndex] {
+            currentSet.isAccepting = false
+            clips[currentIndex] = .stack(currentSet)
         }
         
-        // Hard cap on total items
+        set.isAccepting = true
+        clips[index] = .stack(set)
+        activeStackID = setID
+        isStackMode = true
+    }
+    
+    // Enforce capacity limits (single-pass filter)
+    private func enforceCapacity() {
+        // Separate pinned and unpinned in one pass
+        let pinned = clips.filter { $0.isPinned }
+        var unpinned = clips.filter { !$0.isPinned }
+        
+        // Trim oldest unpinned (newest are at front, oldest at end)
+        if unpinned.count > maxUnpinnedItems {
+            unpinned = Array(unpinned.prefix(maxUnpinnedItems))
+        }
+        
+        clips = pinned + unpinned
+        
+        // Hard cap
         if clips.count > maxTotalItems {
             clips = Array(clips.prefix(maxTotalItems))
         }
         
-        // Safeguard: limit pinned items
-        if pinnedCount > maxPinnedItems {
-            print("Warning: Too many pinned items (\(pinnedCount))")
+        if pinned.count > maxPinnedItems {
+            print("Warning: Too many pinned items (\(pinned.count))")
         }
     }
     
@@ -311,14 +374,38 @@ class ClipboardManager: ObservableObject {
             pasteboard.writeObjects(fileURLs)
             lastCapturedText = fileClip.filePaths.sorted().joined(separator: "\n")
             lastChangeCount = pasteboard.changeCount
+            
+        case .stack(let set):
+            // Combine all items: texts joined by newline, files as URLs, images as first image
+            var objects: [NSPasteboardWriting] = []
+            let combinedText = set.combinedText
+            if !combinedText.isEmpty {
+                objects.append(combinedText as NSString)
+            }
+            let filePaths = set.allFilePaths
+            if !filePaths.isEmpty {
+                let fileURLs = filePaths.map { URL(fileURLWithPath: $0) as NSURL }
+                objects.append(contentsOf: fileURLs)
+            }
+            if combinedText.isEmpty && filePaths.isEmpty, let imgClip = set.firstImageClip, let img = imgClip.fullImage() {
+                objects.append(img)
+            }
+            if !objects.isEmpty {
+                pasteboard.writeObjects(objects)
+            }
+            lastCapturedText = combinedText
+            lastChangeCount = pasteboard.changeCount
         }
     }
     
-    // Get sorted clips (pinned first)
+    // Get sorted clips (pinned first) — cached, invalidated on clips change
     var sortedClips: [ClipType] {
+        if let cached = _cachedSortedClips { return cached }
         let pinned = clips.filter { $0.isPinned }
         let unpinned = clips.filter { !$0.isPinned }
-        return pinned + unpinned
+        let result = pinned + unpinned
+        _cachedSortedClips = result
+        return result
     }
 }
 
