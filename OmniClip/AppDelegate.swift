@@ -55,7 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let dotID = "stackModeDot"
             if isActive {
                 if button.subviews.first(where: { $0.accessibilityIdentifier() == dotID }) == nil {
-                    let dot = NSView(frame: NSRect(x: button.bounds.width - 8, y: 6, width: 6, height: 6))
+                    let dot = NSView(frame: NSRect(x: button.bounds.width - 8, y: 6, width: 8, height: 12))
                     dot.wantsLayer = true
                     dot.layer?.backgroundColor = NSColor.systemBlue.cgColor
                     dot.layer?.cornerRadius = 3

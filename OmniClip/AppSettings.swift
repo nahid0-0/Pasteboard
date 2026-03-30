@@ -261,3 +261,6 @@ class AppSettings: ObservableObject {
         return map[keyCode] ?? "Key\(keyCode)"
     }
 }
+
+
+
