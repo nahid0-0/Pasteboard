@@ -256,6 +256,8 @@ class ClipboardManager: ObservableObject {
         }
         set.items.append(clip)
         clips[index] = .stack(set)
+        // Write the combined stack to the system pasteboard so Cmd+V pastes the full stack
+        copyToClipboard(.stack(set))
         return true
     }
     
@@ -268,6 +270,8 @@ class ClipboardManager: ObservableObject {
                case .stack(var set) = clips[index] {
                 set.isAccepting = false
                 clips[index] = .stack(set)
+                // Write the finalized stack to the system pasteboard so Cmd+V pastes it
+                copyToClipboard(.stack(set))
             }
             activeStackID = nil
             isStackMode = false
