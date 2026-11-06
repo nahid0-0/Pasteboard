@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 class ScreenshotWatcher {
-    private var onScreenshot: ((Data) -> Void)?
+    private var onScreenshot: ((Data, URL) -> Void)?
     private var source: DispatchSourceFileSystemObject?
     private var watchedDirectory: String = ""
     private var knownFiles: Set<String> = []
@@ -10,7 +10,7 @@ class ScreenshotWatcher {
     
     init() {}
     
-    func startWatching(onScreenshot: @escaping (Data) -> Void) {
+    func startWatching(onScreenshot: @escaping (Data, URL) -> Void) {
         guard !isStarted else { return }
         self.onScreenshot = onScreenshot
         
@@ -115,16 +115,12 @@ class ScreenshotWatcher {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
             let url = URL(fileURLWithPath: path)
             if let imageData = try? Data(contentsOf: url),
-               let image = NSImage(data: imageData) {
+               NSImage(data: imageData) != nil {
                 print("[ScreenshotWatcher] Successfully loaded screenshot (\(imageData.count) bytes)")
                 DispatchQueue.main.async {
-                    // Copy to system clipboard immediately
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.writeObjects([image])
-                    
-                    // Also add to our clipboard history
-                    self?.onScreenshot?(imageData)
+                    // The handler adds it to history and writes it to the system clipboard
+                    // (as image data + file URL, so it can also be pasted into Finder)
+                    self?.onScreenshot?(imageData, url)
                 }
             } else {
                 print("[ScreenshotWatcher] Failed to read screenshot file at: \(path)")

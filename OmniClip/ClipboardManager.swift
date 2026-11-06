@@ -20,7 +20,6 @@ class ClipboardManager: ObservableObject {
     private var lastCapturedImageData: Data?
     private var screenshotWatcher: ScreenshotWatcher?
     private var settingsObserver: AnyCancellable?
-    private var ignoreNextClipboardChange: Bool = false
     private let pollQueue = DispatchQueue(label: "com.omniclip.clipboard-poll", qos: .userInitiated)
     
     // Get the frontmost app info at capture time
@@ -37,6 +36,7 @@ class ClipboardManager: ObservableObject {
     
     init() {
         self.lastChangeCount = NSPasteboard.general.changeCount
+        ImageClip.purgePasteFiles()
         startMonitoring()
     }
     
@@ -66,8 +66,8 @@ class ClipboardManager: ObservableObject {
         if enabled {
             if screenshotWatcher == nil {
                 screenshotWatcher = ScreenshotWatcher()
-                screenshotWatcher?.startWatching { [weak self] imageData in
-                    self?.captureScreenshot(imageData)
+                screenshotWatcher?.startWatching { [weak self] imageData, fileURL in
+                    self?.captureScreenshot(imageData, fileURL: fileURL)
                 }
             }
         } else {
@@ -76,26 +76,25 @@ class ClipboardManager: ObservableObject {
         }
     }
     
-    // Capture screenshot from file
-    private func captureScreenshot(_ imageData: Data) {
+    // Capture screenshot from file (called on main thread)
+    private func captureScreenshot(_ imageData: Data, fileURL: URL) {
         // Avoid duplicates - check if same image data recently captured
         guard imageData != lastCapturedImageData else { return }
-        lastCapturedImageData = imageData
-        lastCapturedText = nil
-        
-        // Ignore the next clipboard change since we're about to copy the screenshot
-        ignoreNextClipboardChange = true
         
         let appInfo = frontmostAppInfo
-        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID) else {
+        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID, sourceFileURL: fileURL) else {
             print("Failed to create image clip from screenshot")
             return
         }
+        let clipType = ClipType.image(imageClip)
         
-        DispatchQueue.main.async {
-            self.clips.insert(.image(imageClip), at: 0)
-            self.enforceCapacity()
-        }
+        // In stack mode this also writes the whole stack to the pasteboard
+        if appendToActiveStackIfNeeded(clipType) { return }
+        
+        clips.insert(clipType, at: 0)
+        enforceCapacity()
+        // Put the screenshot on the system clipboard (image data + file URL)
+        copyToClipboard(clipType)
     }
     
     // Check for clipboard changes (runs on background pollQueue)
@@ -105,12 +104,6 @@ class ClipboardManager: ObservableObject {
         
         guard currentChangeCount != lastChangeCount else { return }
         lastChangeCount = currentChangeCount
-        
-        // Skip if this change was triggered by screenshot watcher
-        if ignoreNextClipboardChange {
-            ignoreNextClipboardChange = false
-            return
-        }
         
         // Read pasteboard on the current background thread
         let pasteboard = NSPasteboard.general
@@ -134,7 +127,7 @@ class ClipboardManager: ObservableObject {
                 let ext = url.pathExtension.lowercased()
                 if imageExtensions.contains(ext),
                    let imageData = try? Data(contentsOf: url) {
-                    captureImage(imageData, originalFileName: url.lastPathComponent)
+                    captureImage(imageData, sourceFileURL: url)
                     return
                 } else {
                     captureFile(url: url)
@@ -181,14 +174,14 @@ class ClipboardManager: ObservableObject {
     }
     
     // Capture image clip
-    private func captureImage(_ imageData: Data, originalFileName: String? = nil) {
+    private func captureImage(_ imageData: Data, sourceFileURL: URL? = nil) {
         // Deduplicate consecutive identical images (basic comparison)
         guard imageData != lastCapturedImageData else { return }
         lastCapturedImageData = imageData
         lastCapturedText = nil
         
         let appInfo = frontmostAppInfo
-        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID, originalFileName: originalFileName) else {
+        guard let imageClip = ImageClip(imageData: imageData, sourceAppName: appInfo.name, sourceAppBundleID: appInfo.bundleID, sourceFileURL: sourceFileURL) else {
             print("Failed to create image clip or image too large")
             return
         }
@@ -367,47 +360,47 @@ class ClipboardManager: ObservableObject {
     
     // Copy clip back to clipboard
     func copyToClipboard(_ clip: ClipType) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
+        // Build everything up front (image encoding / temp-file writes can be slow)
+        var objects: [NSPasteboardWriting] = []
+        var capturedText: String?
+        var capturedImageData: Data?
         
         switch clip {
         case .text(let textClip):
-            pasteboard.setString(textClip.text, forType: .string)
-            lastCapturedText = textClip.text
-            lastChangeCount = pasteboard.changeCount
+            objects = [textClip.text as NSString]
+            capturedText = textClip.text
             
         case .image(let imageClip):
-            if let image = imageClip.fullImage() {
-                pasteboard.writeObjects([image])
-                lastCapturedImageData = imageClip.imageData
-                lastChangeCount = pasteboard.changeCount
-            }
+            // Image data + file URL: pastes as an image in apps, as a file in Finder
+            objects = [imageClip.pasteboardItem()]
+            capturedImageData = imageClip.imageData
             
         case .file(let fileClip):
-            let fileURLs = fileClip.filePaths.map { URL(fileURLWithPath: $0) as NSURL }
-            pasteboard.writeObjects(fileURLs)
-            lastCapturedText = fileClip.filePaths.sorted().joined(separator: "\n")
-            lastChangeCount = pasteboard.changeCount
+            objects = fileClip.filePaths.map { URL(fileURLWithPath: $0) as NSURL }
+            capturedText = fileClip.filePaths.sorted().joined(separator: "\n")
             
         case .stack(let set):
-            // Combine all items: texts joined by newline, files as URLs, images as first image
-            var objects: [NSPasteboardWriting] = []
+            // Combine all items: texts joined by newline, then files as URLs, then every image
+            // (each image as data + file URL, so the whole stack pastes into Finder too)
             let combinedText = set.combinedText
             if !combinedText.isEmpty {
                 objects.append(combinedText as NSString)
             }
-            let filePaths = set.allFilePaths
-            if !filePaths.isEmpty {
-                let fileURLs = filePaths.map { URL(fileURLWithPath: $0) as NSURL }
-                objects.append(contentsOf: fileURLs)
-            }
-            if combinedText.isEmpty && filePaths.isEmpty, let imgClip = set.firstImageClip, let img = imgClip.fullImage() {
-                objects.append(img)
-            }
+            objects.append(contentsOf: set.allFilePaths.map { URL(fileURLWithPath: $0) as NSURL })
+            objects.append(contentsOf: set.allImageClips.map { $0.pasteboardItem() })
+            capturedText = combinedText
+            capturedImageData = set.allImageClips.last?.imageData
+        }
+        
+        // Write + record changeCount on the poll queue so the poller never sees our own write
+        pollQueue.sync {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
             if !objects.isEmpty {
                 pasteboard.writeObjects(objects)
             }
-            lastCapturedText = combinedText
+            if let text = capturedText { lastCapturedText = text }
+            if let data = capturedImageData { lastCapturedImageData = data }
             lastChangeCount = pasteboard.changeCount
         }
     }

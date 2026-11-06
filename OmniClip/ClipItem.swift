@@ -98,12 +98,14 @@ struct ImageClip: ClipItem {
     let sourceAppName: String?
     let sourceAppBundleID: String?
     let originalFileName: String?
-    
+    /// File on disk the image came from (copied file in Finder, or a screenshot file), if any
+    let sourceFileURL: URL?
+
     // Cached at creation time
     let cachedThumbnail: NSImage?
     private var _cachedFullImage: NSImage?
-    
-    init?(imageData: Data, maxSize: Int = 10_000_000, sourceAppName: String? = nil, sourceAppBundleID: String? = nil, originalFileName: String? = nil) {
+
+    init?(imageData: Data, maxSize: Int = 10_000_000, sourceAppName: String? = nil, sourceAppBundleID: String? = nil, originalFileName: String? = nil, sourceFileURL: URL? = nil) {
         guard imageData.count <= maxSize else { return nil }
         
         guard let nsImage = NSImage(data: imageData) else { return nil }
@@ -117,8 +119,9 @@ struct ImageClip: ClipItem {
         self.height = representation.pixelsHigh
         self.sourceAppName = sourceAppName
         self.sourceAppBundleID = sourceAppBundleID
-        self.originalFileName = originalFileName
-        
+        self.originalFileName = originalFileName ?? sourceFileURL?.lastPathComponent
+        self.sourceFileURL = sourceFileURL
+
         self.cachedThumbnail = ImageClip.generateThumbnail(from: nsImage, size: CGSize(width: 64, height: 64))
         self._cachedFullImage = nsImage
     }
@@ -164,7 +167,76 @@ struct ImageClip: ClipItem {
     func fullImage() -> NSImage? {
         return _cachedFullImage ?? NSImage(data: imageData)
     }
-    
+
+    // MARK: - Pasteboard / file backing
+
+    /// Directory for temp image files handed to Finder & other apps on paste
+    static var pasteFilesDirectory: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return caches.appendingPathComponent("Pasteboard/PasteFiles", isDirectory: true)
+    }
+
+    /// Remove all temp image files (called at launch — clips are not persisted)
+    static func purgePasteFiles() {
+        try? FileManager.default.removeItem(at: pasteFilesDirectory)
+    }
+
+    /// PNG/JPEG data and file extension suitable for writing to disk
+    private func encodedForFile() -> (data: Data, ext: String)? {
+        let bytes = [UInt8](imageData.prefix(4))
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return (imageData, "png") }
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return (imageData, "jpg") }
+        guard let rep = NSBitmapImageRep(data: imageData),
+              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        return (png, "png")
+    }
+
+    /// A file URL holding this image — the original file if it still exists, otherwise a temp file.
+    func fileURLForPasting() -> URL? {
+        if let url = sourceFileURL, FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        guard let encoded = encodedForFile() else { return nil }
+
+        let baseName: String
+        if let name = originalFileName {
+            baseName = (name as NSString).deletingPathExtension
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+            baseName = "Image \(formatter.string(from: createdAt))"
+        }
+        let dir = ImageClip.pasteFilesDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
+        let fileURL = dir.appendingPathComponent(baseName).appendingPathExtension(encoded.ext)
+        if FileManager.default.fileExists(atPath: fileURL.path) { return fileURL }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try encoded.data.write(to: fileURL)
+            return fileURL
+        } catch {
+            print("Failed to write paste file: \(error)")
+            return nil
+        }
+    }
+
+    /// Pasteboard item carrying the image data AND a file URL, so it pastes into
+    /// image-aware apps (as an image) and into Finder folders (as a file).
+    func pasteboardItem() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        if let image = fullImage(), let tiff = image.tiffRepresentation {
+            if let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                item.setData(png, forType: .png)
+            }
+            item.setData(tiff, forType: .tiff)
+        }
+        if let url = fileURLForPasting() {
+            item.setString(url.absoluteString, forType: .fileURL)
+        }
+        return item
+    }
+
     static func == (lhs: ImageClip, rhs: ImageClip) -> Bool {
         lhs.id == rhs.id
     }
@@ -287,10 +359,15 @@ struct StackSet: ClipItem {
     
     /// First image clip if any
     var firstImageClip: ImageClip? {
-        for item in items {
+        allImageClips.first
+    }
+
+    /// All image clips, in stack order
+    var allImageClips: [ImageClip] {
+        items.compactMap { item -> ImageClip? in
             if case .image(let img) = item { return img }
+            return nil
         }
-        return nil
     }
     
     static func == (lhs: StackSet, rhs: StackSet) -> Bool {

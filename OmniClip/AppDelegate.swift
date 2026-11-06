@@ -53,8 +53,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         if let button = statusItem.button {
-            let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-            button.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Pasteboard")?.withSymbolConfiguration(config)
+            // App glyph (paperclip stack) as a template image so it adapts to light/dark menu bars.
+            // NSImage(named:) picks up menubar_icon.png + menubar_icon@2x.png from Resources.
+            if let icon = NSImage(named: "menubar_icon") {
+                icon.size = NSSize(width: 18, height: 18)
+                icon.isTemplate = true
+                icon.accessibilityDescription = "Pasteboard"
+                button.image = icon
+            } else {
+                let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+                button.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Pasteboard")?.withSymbolConfiguration(config)
+            }
             button.action = #selector(statusItemClicked)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
