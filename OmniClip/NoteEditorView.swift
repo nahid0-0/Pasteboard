@@ -180,7 +180,7 @@ struct NoteEditorView: View {
 
     private func imageBody(data: Data) -> some View {
         Group {
-            if let nsImage = NSImage(data: data) {
+            if let nsImage = NoteImageCache.shared.image(for: data) {
                 ScrollView {
                     Image(nsImage: nsImage)
                         .resizable()
@@ -574,7 +574,8 @@ struct FormItemRow: View {
             HStack(spacing: 10) {
                 // Preview icon — small image thumbnail for image fields, copy icon otherwise
                 Group {
-                    if let imageData = item.imageData, let nsImage = NSImage(data: imageData) {
+                    if let imageData = item.imageData,
+                       let nsImage = NoteImageCache.shared.thumbnail(for: imageData, maxPixel: 256) {
                         Image(nsImage: nsImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -669,7 +670,7 @@ struct FormItemRow: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .popover(isPresented: $showFullImage) {
-            if let imageData = item.imageData, let nsImage = NSImage(data: imageData) {
+            if let imageData = item.imageData, let nsImage = NoteImageCache.shared.image(for: imageData) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

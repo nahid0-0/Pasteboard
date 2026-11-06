@@ -24,6 +24,7 @@ echo "📦 Compiling Swift sources..."
 swiftc -o "$MACOS_DIR/$APP_NAME" \
     -sdk $(xcrun --show-sdk-path) \
     -target arm64-apple-macos13.0 \
+    -O -wmo \
     -framework AppKit \
     -framework SwiftUI \
     -framework Combine \

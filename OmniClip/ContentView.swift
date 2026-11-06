@@ -23,14 +23,10 @@ struct ContentView: View {
     @State private var dragStartWidth: CGFloat = 380
     @State private var showAddPanel: Bool = false
     
-    // O(1) lookup for selected clip
-    private var clipsByID: [UUID: ClipType] {
-        Dictionary(uniqueKeysWithValues: clipboardManager.clips.map { ($0.id, $0) })
-    }
-    
+    // Linear scan over ≤55 clips — cheaper than rebuilding a dictionary on every render
     var selectedClip: ClipType? {
         guard let id = selectedClipID else { return nil }
-        return clipsByID[id]
+        return clipboardManager.clips.first { $0.id == id }
     }
     
     var filteredClips: [ClipType] {
@@ -78,11 +74,13 @@ struct ContentView: View {
     }
     
     var body: some View {
+        // Filter once per render (was recomputed ~6× per render)
+        let visibleClips = filteredClips
         VStack(spacing: 0) {
             HStack(spacing: 0) {
             // Left side: List of clips
             VStack(spacing: 0) {
-                if filteredClips.isEmpty {
+                if visibleClips.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "clipboard")
                             .font(.system(size: 48))
@@ -100,7 +98,7 @@ struct ContentView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 4) {
-                                ForEach(filteredClips) { clip in
+                                ForEach(visibleClips) { clip in
                                     EquatableView(content: ClipItemRow(
                                         clip: clip,
                                         isSelected: selectedClipID == clip.id,
@@ -138,7 +136,7 @@ struct ContentView: View {
                 
                 // Bottom status bar
                 HStack(spacing: 12) {
-                    Text("\(filteredClips.count) clips")
+                    Text("\(visibleClips.count) clips")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     
@@ -228,14 +226,14 @@ struct ContentView: View {
             selectedClipID = nil
         }
         .onAppear {
-            if selectedClipID == nil, let firstClip = filteredClips.first {
+            if selectedClipID == nil, let firstClip = visibleClips.first {
                 selectedClipID = firstClip.id
             }
         }
         .onChange(of: keyboardActions.actionCounter) { _ in
             handleKeyboardAction(keyboardActions.lastAction)
         }
-        .onChange(of: filteredClips.count) { newCount in
+        .onChange(of: visibleClips.count) { newCount in
             toolbarState.clipCount = newCount
         }
     }

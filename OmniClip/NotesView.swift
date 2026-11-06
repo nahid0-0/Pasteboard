@@ -1,5 +1,75 @@
 import SwiftUI
 import AppKit
+import ImageIO
+
+// MARK: - Note image cache
+// Notes store raw image Data; decoding it on every SwiftUI redraw (hover, selection,
+// typing) is expensive. These caches decode each image once.
+
+final class NoteImageCache {
+    static let shared = NoteImageCache()
+
+    private let fullImages = NSCache<NSData, NSImage>()
+    private let thumbnails = NSCache<NSData, NSImage>()
+    private let sizes = NSCache<NSData, NSValue>()
+
+    private init() {
+        fullImages.countLimit = 20
+        thumbnails.countLimit = 300
+        sizes.countLimit = 500
+    }
+
+    /// Full image (decoded once)
+    func image(for data: Data) -> NSImage? {
+        let key = data as NSData
+        if let cached = fullImages.object(forKey: key) { return cached }
+        guard let image = NSImage(data: data) else { return nil }
+        fullImages.setObject(image, forKey: key)
+        return image
+    }
+
+    /// Small thumbnail decoded straight to `maxPixel` (no full-size decode)
+    func thumbnail(for data: Data, maxPixel: Int) -> NSImage? {
+        let key = data as NSData
+        if let cached = thumbnails.object(forKey: key) { return cached }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        let thumb: NSImage?
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            thumb = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        } else {
+            thumb = image(for: data)
+        }
+        if let thumb = thumb { thumbnails.setObject(thumb, forKey: key) }
+        return thumb
+    }
+
+    /// Pixel dimensions read from the image header (no decode)
+    func pixelSize(for data: Data) -> (width: Int, height: Int)? {
+        let key = data as NSData
+        if let cached = sizes.object(forKey: key) {
+            let s = cached.sizeValue
+            return (Int(s.width), Int(s.height))
+        }
+        var result: (Int, Int)?
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int,
+           let h = props[kCGImagePropertyPixelHeight] as? Int {
+            result = (w, h)
+        } else if let rep = NSImage(data: data)?.representations.first {
+            result = (rep.pixelsWide, rep.pixelsHigh)
+        }
+        if let r = result {
+            sizes.setObject(NSValue(size: NSSize(width: r.0, height: r.1)), forKey: key)
+        }
+        return result
+    }
+}
 
 // MARK: - Scroll edge glow suppression (macOS 26 draws a soft glass gradient
 // at scroll edges by default; we want flat, minimal panels instead)
@@ -219,8 +289,8 @@ struct NoteItemRow: View {
         case .form(let items):
             return "\(items.count) field\(items.count == 1 ? "" : "s")"
         case .image(let data):
-            if let rep = NSImage(data: data)?.representations.first {
-                return "\(rep.pixelsWide) × \(rep.pixelsHigh)"
+            if !data.isEmpty, let size = NoteImageCache.shared.pixelSize(for: data) {
+                return "\(size.width) × \(size.height)"
             }
             return "No image"
         }

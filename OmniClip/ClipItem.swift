@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import UniformTypeIdentifiers
+import ImageIO
 
 // Data type classification
 enum ClipDataType: String {
@@ -104,6 +105,8 @@ struct ImageClip: ClipItem {
     // Cached at creation time
     let cachedThumbnail: NSImage?
     private var _cachedFullImage: NSImage?
+    /// Encoded pasteboard data, computed once on first copy (shared by all copies of this struct)
+    private let pasteCache = PasteDataCache()
 
     init?(imageData: Data, maxSize: Int = 10_000_000, sourceAppName: String? = nil, sourceAppBundleID: String? = nil, originalFileName: String? = nil, sourceFileURL: URL? = nil) {
         guard imageData.count <= maxSize else { return nil }
@@ -122,7 +125,7 @@ struct ImageClip: ClipItem {
         self.originalFileName = originalFileName ?? sourceFileURL?.lastPathComponent
         self.sourceFileURL = sourceFileURL
 
-        self.cachedThumbnail = ImageClip.generateThumbnail(from: nsImage, size: CGSize(width: 64, height: 64))
+        self.cachedThumbnail = ImageClip.generateThumbnail(data: imageData, fallback: nsImage, size: CGSize(width: 64, height: 64))
         self._cachedFullImage = nsImage
     }
     
@@ -137,7 +140,9 @@ struct ImageClip: ClipItem {
         return "\(width) x \(height)"
     }
     
-    private static func generateThumbnail(from original: NSImage, size: CGSize) -> NSImage? {
+    /// Thumbnail via ImageIO (decodes straight to a small bitmap — much cheaper than
+    /// drawing the full-size image). Falls back to drawing if ImageIO can't read the data.
+    private static func generateThumbnail(data: Data, fallback original: NSImage, size: CGSize) -> NSImage? {
         let originalSize = original.size
         guard originalSize.width > 0 && originalSize.height > 0 else { return nil }
         let aspectRatio = originalSize.width / originalSize.height
@@ -147,6 +152,17 @@ struct ImageClip: ClipItem {
             targetSize = CGSize(width: size.width, height: size.width / aspectRatio)
         } else {
             targetSize = CGSize(width: size.height * aspectRatio, height: size.height)
+        }
+        
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(max(size.width, size.height) * 2)  // @2x
+        ]
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            return NSImage(cgImage: cgThumb, size: targetSize)
         }
         
         let thumbnail = NSImage(size: targetSize)
@@ -182,14 +198,37 @@ struct ImageClip: ClipItem {
         try? FileManager.default.removeItem(at: pasteFilesDirectory)
     }
 
-    /// PNG/JPEG data and file extension suitable for writing to disk
-    private func encodedForFile() -> (data: Data, ext: String)? {
-        let bytes = [UInt8](imageData.prefix(4))
-        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return (imageData, "png") }
-        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return (imageData, "jpg") }
-        guard let rep = NSBitmapImageRep(data: imageData),
-              let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        return (png, "png")
+    // Format sniffing from magic bytes
+    private var headerBytes: [UInt8] { [UInt8](imageData.prefix(4)) }
+    private var isPNG: Bool { headerBytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) }
+    private var isJPEG: Bool { headerBytes.starts(with: [0xFF, 0xD8, 0xFF]) }
+    private var isTIFF: Bool {
+        let b = headerBytes
+        return b.starts(with: [0x49, 0x49, 0x2A, 0x00]) || b.starts(with: [0x4D, 0x4D, 0x00, 0x2A])
+    }
+
+    /// PNG bytes — the original data if it already is PNG, otherwise encoded once and cached
+    private func pngData() -> Data? {
+        if isPNG { return imageData }
+        if let cached = pasteCache.png { return cached }
+        var png: Data?
+        if let rep = NSBitmapImageRep(data: imageData) {
+            png = rep.representation(using: .png, properties: [:])
+        }
+        if png == nil, let tiff = fullImage()?.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+            png = rep.representation(using: .png, properties: [:])
+        }
+        pasteCache.png = png
+        return png
+    }
+
+    /// TIFF bytes — the original data if it already is TIFF, otherwise encoded once and cached
+    private func tiffData() -> Data? {
+        if isTIFF { return imageData }
+        if let cached = pasteCache.tiff { return cached }
+        let tiff = fullImage()?.tiffRepresentation
+        pasteCache.tiff = tiff
+        return tiff
     }
 
     /// A file URL holding this image — the original file if it still exists, otherwise a temp file.
@@ -197,8 +236,12 @@ struct ImageClip: ClipItem {
         if let url = sourceFileURL, FileManager.default.fileExists(atPath: url.path) {
             return url
         }
-        guard let encoded = encodedForFile() else { return nil }
+        // Temp file already written for this clip?
+        if let url = pasteCache.fileURL, FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
 
+        let ext = isJPEG ? "jpg" : "png"
         let baseName: String
         if let name = originalFileName {
             baseName = (name as NSString).deletingPathExtension
@@ -208,11 +251,16 @@ struct ImageClip: ClipItem {
             baseName = "Image \(formatter.string(from: createdAt))"
         }
         let dir = ImageClip.pasteFilesDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
-        let fileURL = dir.appendingPathComponent(baseName).appendingPathExtension(encoded.ext)
-        if FileManager.default.fileExists(atPath: fileURL.path) { return fileURL }
+        let fileURL = dir.appendingPathComponent(baseName).appendingPathExtension(ext)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            pasteCache.fileURL = fileURL
+            return fileURL
+        }
+        guard let data = isJPEG ? imageData : pngData() else { return nil }
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try encoded.data.write(to: fileURL)
+            try data.write(to: fileURL)
+            pasteCache.fileURL = fileURL
             return fileURL
         } catch {
             print("Failed to write paste file: \(error)")
@@ -224,11 +272,10 @@ struct ImageClip: ClipItem {
     /// image-aware apps (as an image) and into Finder folders (as a file).
     func pasteboardItem() -> NSPasteboardItem {
         let item = NSPasteboardItem()
-        if let image = fullImage(), let tiff = image.tiffRepresentation {
-            if let rep = NSBitmapImageRep(data: tiff),
-               let png = rep.representation(using: .png, properties: [:]) {
-                item.setData(png, forType: .png)
-            }
+        if let png = pngData() {
+            item.setData(png, forType: .png)
+        }
+        if let tiff = tiffData() {
             item.setData(tiff, forType: .tiff)
         }
         if let url = fileURLForPasting() {
@@ -236,10 +283,17 @@ struct ImageClip: ClipItem {
         }
         return item
     }
-
+    
     static func == (lhs: ImageClip, rhs: ImageClip) -> Bool {
         lhs.id == rhs.id
     }
+}
+
+/// Reference-type cache so encoded image data survives struct copies of an ImageClip
+final class PasteDataCache {
+    var png: Data?
+    var tiff: Data?
+    var fileURL: URL?
 }
 
 // File clip model - stores reference to file(s), not contents

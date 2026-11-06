@@ -179,66 +179,63 @@ private struct ScrollableTextView: NSViewRepresentable {
     }
 }
 
-// Basic syntax highlighter using NSAttributedString
+// Basic syntax highlighter using NSAttributedString.
+// Patterns are compiled once; all keywords share one alternation regex (same colour,
+// same application order as before: strings → comments → keywords → numbers).
 struct SyntaxHighlighter {
+    private static let keywords = [
+        "func", "class", "struct", "enum", "protocol", "extension", "import",
+        "var", "let", "const", "def", "return", "if", "else", "for", "while",
+        "switch", "case", "break", "continue", "do", "try", "catch", "throw",
+        "public", "private", "static", "final", "override", "self", "super",
+        "true", "false", "nil", "null", "None", "undefined",
+        "async", "await", "function", "void", "int", "string", "bool",
+        "guard", "where", "in", "as", "is", "typealias", "init", "deinit",
+    ]
+    
+    private static func regex(_ pattern: String) -> NSRegularExpression? {
+        try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+    
+    private static let doubleQuoted = regex("\"[^\"\\\\]*(\\\\.[^\"\\\\]*)*\"")
+    private static let singleQuoted = regex("'[^'\\\\]*(\\\\.[^'\\\\]*)*'")
+    private static let lineComment  = regex("//.*$")
+    private static let hashComment  = regex("#(?!include|define|import).*$")
+    private static let keywordRegex = regex("\\b(?:" + keywords.joined(separator: "|") + ")\\b")
+    private static let numberRegex  = regex("\\b\\d+(\\.\\d+)?\\b")
+    
+    private static let keywordColor = NSColor(red: 0.78, green: 0.46, blue: 0.87, alpha: 1.0)
+    private static let stringColor  = NSColor(red: 0.89, green: 0.55, blue: 0.40, alpha: 1.0)
+    private static let commentColor = NSColor(red: 0.45, green: 0.55, blue: 0.45, alpha: 1.0)
+    private static let numberColor  = NSColor(red: 0.82, green: 0.75, blue: 0.50, alpha: 1.0)
+    
     static func highlight(_ code: String) -> NSAttributedString {
-        let isDark = true // Always dark theme
-        
         let baseFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let baseColor = NSColor.labelColor
-        
         let attributed = NSMutableAttributedString(string: code, attributes: [
             .font: baseFont,
-            .foregroundColor: baseColor
+            .foregroundColor: NSColor.labelColor
         ])
+        let fullRange = NSRange(location: 0, length: (code as NSString).length)
         
-        let keywords = [
-            "func", "class", "struct", "enum", "protocol", "extension", "import",
-            "var", "let", "const", "def", "return", "if", "else", "for", "while",
-            "switch", "case", "break", "continue", "do", "try", "catch", "throw",
-            "public", "private", "static", "final", "override", "self", "super",
-            "true", "false", "nil", "null", "None", "undefined",
-            "async", "await", "function", "void", "int", "string", "bool",
-            "guard", "where", "in", "as", "is", "typealias", "init", "deinit",
-        ]
-        
-        let keywordColor = isDark
-            ? NSColor(red: 0.78, green: 0.46, blue: 0.87, alpha: 1.0)
-            : NSColor(red: 0.61, green: 0.20, blue: 0.69, alpha: 1.0)
-        
-        let stringColor = isDark
-            ? NSColor(red: 0.89, green: 0.55, blue: 0.40, alpha: 1.0)
-            : NSColor(red: 0.77, green: 0.25, blue: 0.18, alpha: 1.0)
-        
-        let commentColor = isDark
-            ? NSColor(red: 0.45, green: 0.55, blue: 0.45, alpha: 1.0)
-            : NSColor(red: 0.30, green: 0.50, blue: 0.30, alpha: 1.0)
-        
-        let numberColor = isDark
-            ? NSColor(red: 0.82, green: 0.75, blue: 0.50, alpha: 1.0)
-            : NSColor(red: 0.11, green: 0.43, blue: 0.69, alpha: 1.0)
-        
-        let nsString = code as NSString
-        
-        highlightPattern("\"[^\"\\\\]*(\\\\.[^\"\\\\]*)*\"", in: attributed, with: stringColor, range: NSRange(location: 0, length: nsString.length))
-        highlightPattern("'[^'\\\\]*(\\\\.[^'\\\\]*)*'", in: attributed, with: stringColor, range: NSRange(location: 0, length: nsString.length))
-        highlightPattern("//.*$", in: attributed, with: commentColor, range: NSRange(location: 0, length: nsString.length))
-        highlightPattern("#(?!include|define|import).*$", in: attributed, with: commentColor, range: NSRange(location: 0, length: nsString.length))
-        
-        for keyword in keywords {
-            highlightPattern("\\b\(keyword)\\b", in: attributed, with: keywordColor, range: NSRange(location: 0, length: nsString.length))
-        }
-        
-        highlightPattern("\\b\\d+(\\.\\d+)?\\b", in: attributed, with: numberColor, range: NSRange(location: 0, length: nsString.length))
+        attributed.beginEditing()
+        highlight(doubleQuoted, in: attributed, with: stringColor, range: fullRange)
+        highlight(singleQuoted, in: attributed, with: stringColor, range: fullRange)
+        highlight(lineComment, in: attributed, with: commentColor, range: fullRange)
+        highlight(hashComment, in: attributed, with: commentColor, range: fullRange)
+        highlight(keywordRegex, in: attributed, with: keywordColor, range: fullRange)
+        highlight(numberRegex, in: attributed, with: numberColor, range: fullRange)
+        attributed.endEditing()
         
         return attributed
     }
     
-    private static func highlightPattern(_ pattern: String, in attributed: NSMutableAttributedString, with color: NSColor, range: NSRange) {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { return }
-        let matches = regex.matches(in: attributed.string, options: [], range: range)
-        for match in matches {
-            attributed.addAttribute(.foregroundColor, value: color, range: match.range)
+    private static func highlight(_ regex: NSRegularExpression?, in attributed: NSMutableAttributedString, with color: NSColor, range: NSRange) {
+        guard let regex = regex else { return }
+        let string = attributed.string
+        regex.enumerateMatches(in: string, options: [], range: range) { match, _, _ in
+            if let r = match?.range {
+                attributed.addAttribute(.foregroundColor, value: color, range: r)
+            }
         }
     }
 }
