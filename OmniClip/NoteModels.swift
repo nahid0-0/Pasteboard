@@ -84,17 +84,35 @@ struct Note: Identifiable, Codable, Equatable {
     var content: NoteContent
     var createdAt: Date
     var modifiedAt: Date
+    var isPinned: Bool
 
     init(id: UUID = UUID(),
          title: String,
          content: NoteContent,
          createdAt: Date = Date(),
-         modifiedAt: Date = Date()) {
+         modifiedAt: Date = Date(),
+         isPinned: Bool = false) {
         self.id = id
         self.title = title
         self.content = content
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
+        self.isPinned = isPinned
+    }
+
+    // Custom decoding so notes saved before `isPinned` existed still load
+    private enum CodingKeys: String, CodingKey {
+        case id, title, content, createdAt, modifiedAt, isPinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        content = try c.decode(NoteContent.self, forKey: .content)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 
     /// A brief one-line preview string shown in the card

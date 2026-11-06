@@ -260,11 +260,9 @@ struct PreviewPanel: View {
             Divider()
             contentArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(appSettings.theme.emptyBg)
+                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
             Divider()
-            detailsSection
-            Divider()
-            actionBar
+            footerBar
         }
         .onAppear {
             isFullScreen = NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false
@@ -284,24 +282,27 @@ struct PreviewPanel: View {
             if let icon = clip.sourceAppIcon {
                 Image(nsImage: icon)
                     .resizable()
-                    .frame(width: 20, height: 20)
-                    .cornerRadius(4)
+                    .frame(width: 16, height: 16)
+                    .cornerRadius(3)
             } else {
                 Image(systemName: "app.dashed")
-                    .font(.system(size: 16))
+                    .font(.system(size: 13))
                     .foregroundColor(.secondary)
-                    .frame(width: 20, height: 20)
+                    .frame(width: 16, height: 16)
             }
             
-            VStack(alignment: .leading, spacing: 1) {
+            // One line: "App · Type"
+            HStack(spacing: 5) {
                 Text(clip.sourceAppName ?? "Unknown App")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                
+                Text("·")
+                    .foregroundColor(Color.white.opacity(0.25))
                 Text(clip.dataType.rawValue)
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
+                    .lineLimit(1)
             }
             
             Spacer()
@@ -321,8 +322,7 @@ struct PreviewPanel: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 11)
-        .padding(.bottom, 8)
+        .padding(.vertical, 7)
         .background(appSettings.theme.mainBg)
     }
     
@@ -380,7 +380,7 @@ struct PreviewPanel: View {
             } else {
                 ScrollableTextView(text: textClip.text, syntaxHighlighting: appSettings.syntaxHighlighting, showLineNumbers: false, theme: appSettings.theme)
                     .cornerRadius(6)
-                    .padding(12)
+                    .padding(4)
             }
             
         case .image(let imageClip):
@@ -569,109 +569,75 @@ struct PreviewPanel: View {
         }
     }
 
-    private var detailsSection: some View {
-        HStack(spacing: 0) {
-            detailColumn(
-                icon: contentDetailIcon,
-                label: "Content",
-                value: contentDetailValue
-            )
-        }
-        .frame(height: 44)
-        .background(appSettings.theme.panelBg)
-    }
+    // MARK: - Footer (details + actions in one compact bar)
 
-    private func detailColumn(icon: String, label: String, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 13))
-                .foregroundColor(Color.white.opacity(0.4))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Color.white.opacity(0.35))
-                    .textCase(.uppercase)
-                Text(value)
-                    .font(.system(size: 11))
-                    .foregroundColor(.primary)
+    private var footerBar: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: contentDetailIcon)
+                    .font(.system(size: 9))
+                Text(contentDetailValue)
                     .lineLimit(1)
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-    }
-    
-    // MARK: - Action Bar
+            .font(.system(size: 10))
+            .foregroundColor(.secondary)
 
-    private var actionBar: some View {
-        HStack(spacing: 8) {
-            // Delete button — direct, no menu
+            Spacer(minLength: 8)
+
+            // Delete — icon only, kept apart from Copy
             Button(action: {
                 clipboardManager.delete(clipID: clip.id)
                 onClose()
             }) {
-                HStack(spacing: 5) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 10))
-                    Text("Delete")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.07))
-                .cornerRadius(5)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
-                )
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .frame(width: 24, height: 20)
+                    .background(Color.white.opacity(0.07))
+                    .cornerRadius(4)
             }
             .buttonStyle(.plain)
+            .help("Delete")
+            .padding(.trailing, 4)
 
-            Spacer()
-
-            // Pin / Unpin button
+            // Pin / Unpin
             Button(action: {
                 clipboardManager.togglePin(for: clip.id)
             }) {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: clip.isPinned ? "pin.slash.fill" : "pin")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                     Text(clip.isPinned ? "Unpin" : "Pin")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                 }
                 .foregroundColor(.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
                 .background(Color.white.opacity(0.07))
-                .cornerRadius(5)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
-                )
+                .cornerRadius(4)
             }
             .buttonStyle(.plain)
 
-            // Copy button (primary CTA)
+            // Copy (primary)
             Button(action: {
                 clipboardManager.copyToClipboard(clip)
             }) {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                     Text("Copy")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
                 .background(Color.accentColor)
-                .cornerRadius(5)
+                .cornerRadius(4)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(appSettings.theme.panelBg)
     }
     

@@ -5,6 +5,7 @@ import AppKit
 class ToolbarState: ObservableObject {
     @Published var searchText: String = ""
     @Published var typeFilter: String = "All"
+    @Published var notesFilter: String = "All"   // Notes page: All / Text / Form / Image
     @Published var searchFieldFocused: Bool = false
     @Published var clipCount: Int = 0
     @Published var isPopoverMode: Bool = false
@@ -214,7 +215,7 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(appSettings.theme.emptyBg)
+                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
             }
             }
         }
@@ -408,6 +409,23 @@ struct TitlebarToolbarView: View {
                 Text("Notes")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.primary)
+                    .padding(.trailing, 4)
+
+                // Type filter pills (same style as the clipboard page)
+                ForEach(["All", "Text", "Form", "Image"], id: \.self) { option in
+                    Button(action: { toolbarState.notesFilter = option }) {
+                        Text(option)
+                            .font(.system(size: 10, weight: toolbarState.notesFilter == option ? .semibold : .regular))
+                            .foregroundColor(toolbarState.notesFilter == option ? .primary : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(toolbarState.notesFilter == option ? Color.secondary.opacity(0.2) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Spacer()
 

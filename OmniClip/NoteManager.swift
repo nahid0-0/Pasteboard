@@ -53,6 +53,13 @@ class NoteManager: ObservableObject {
         save()
     }
 
+    /// Pin / unpin a note (pinned notes are listed first). Doesn't bump modifiedAt.
+    func togglePin(id: UUID) {
+        guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
+        notes[idx].isPinned.toggle()
+        save()
+    }
+
     func updateContent(id: UUID, content: NoteContent) {
         guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
         notes[idx].content = content

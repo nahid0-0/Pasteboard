@@ -41,7 +41,8 @@ struct RootView: View {
                 case .notes:
                     NotesView(
                         noteManager: noteManager,
-                        appSettings: appSettings
+                        appSettings: appSettings,
+                        toolbarState: toolbarState
                     )
                     .transition(.opacity)
 
@@ -54,6 +55,9 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Solid backdrop (extends under the titlebar) so the page cross-fade never
+        // reveals the lighter window background — that caused a brief "glow" on switch.
+        .background(appSettings.theme.mainBg)
         // Provide navigation to all child views (TitlebarToolbarView uses @EnvironmentObject)
         .environmentObject(navigation)
     }

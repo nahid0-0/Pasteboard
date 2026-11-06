@@ -26,22 +26,30 @@ struct NoteEditorView: View {
     }()
 
     var body: some View {
+        // Same structure as the clipboard PreviewPanel:
+        // header / content / details / action bar
         VStack(spacing: 0) {
             header
-
             Divider()
-
-            switch note.content {
-            case .plainText:
-                plainTextBody
-            case .form(let items):
-                formBody(items: items)
-            case .image(let data):
-                imageBody(data: data)
-            }
+            contentArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
+            Divider()
+            footerBar
         }
-        .background(appSettings.theme.mainBg)
         .onAppear { syncState() }
+    }
+
+    @ViewBuilder
+    private var contentArea: some View {
+        switch note.content {
+        case .plainText:
+            plainTextBody
+        case .form(let items):
+            formBody(items: items)
+        case .image(let data):
+            imageBody(data: data)
+        }
     }
 
     private func syncState() {
@@ -55,88 +63,182 @@ struct NoteEditorView: View {
     // MARK: - Header (always-editable title)
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: note.content.typeIcon)
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
+                .frame(width: 16, height: 16)
 
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
                 // Title field — updates the left panel in real-time on every keystroke.
                 // Using note.id captured at call time is safe: the ID only changes when
-                // onChange(of: note.id) fires, which resets editingTitle via syncState().
+                // the view is recreated via .id(note.id), which resets editingTitle.
                 TextField("Untitled", text: $editingTitle, onCommit: {
                     saveTitle()
                 })
                 .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.primary)
                 .onChange(of: editingTitle) { newVal in
                     let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
-                    // note.id is always the CURRENT note here — safe to use directly
                     noteManager.updateTitle(id: note.id, title: trimmed)
                 }
 
-                Text("Modified \(Self.dateFormatter.string(from: note.modifiedAt))")
-                    .font(.system(size: 9))
-                    .foregroundColor(Color.white.opacity(0.3))
+                Text("\(note.content.typeName) Note")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize()
             }
 
-            Spacer()
-
-            // Copy button — plain text notes
-            if case .plainText = note.content {
-                Button(action: copyPlainText) {
-                    HStack(spacing: 4) {
-                        Image(systemName: justCopiedText ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10, weight: .medium))
-                        Text(justCopiedText ? "Copied" : "Copy")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(justCopiedText ? .green : .secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(justCopiedText ? Color.green.opacity(0.12) : Color.white.opacity(0.07))
-                    )
+            if note.isPinned {
+                HStack(spacing: 2) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 8))
+                    Text("Pinned")
+                        .font(.system(size: 10))
                 }
-                .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.2), value: justCopiedText)
-            }
-
-            // Copy button — image notes (only once an image has been set)
-            if case .image(let data) = note.content, !data.isEmpty {
-                Button(action: copyImage) {
-                    HStack(spacing: 4) {
-                        Image(systemName: justCopiedImage ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10, weight: .medium))
-                        Text(justCopiedImage ? "Copied" : "Copy")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(justCopiedImage ? .green : .secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(justCopiedImage ? Color.green.opacity(0.12) : Color.white.opacity(0.07))
-                    )
-                }
-                .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.2), value: justCopiedImage)
-            }
-
-            Text(note.content.typeName)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(.secondary)
+                .foregroundColor(.accentColor)
                 .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.vertical, 2)
+                .background(Color.accentColor.opacity(0.1))
+                .cornerRadius(4)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(appSettings.theme.mainBg)
+    }
+
+    // MARK: - Details (same style as clipboard preview)
+
+    private var contentDetailIcon: String {
+        switch note.content {
+        case .plainText: return "doc.text"
+        case .form: return "list.bullet.clipboard"
+        case .image: return "photo"
+        }
+    }
+
+    private var contentDetailValue: String {
+        switch note.content {
+        case .plainText(let t):
+            let chars = t.count
+            let words = t.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+            let lines = t.isEmpty ? 0 : t.components(separatedBy: .newlines).count
+            return "\(chars) chars · \(words) words · \(lines) lines"
+        case .form(let items):
+            let images = items.filter { $0.imageData != nil }.count
+            let base = "\(items.count) field\(items.count == 1 ? "" : "s")"
+            return images > 0 ? "\(base) · \(images) image\(images == 1 ? "" : "s")" : base
+        case .image(let data):
+            if !data.isEmpty, let size = NoteImageCache.shared.pixelSize(for: data) {
+                return "\(size.width) × \(size.height) px"
+            }
+            return "No image"
+        }
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    // MARK: - Footer (details + actions in one compact bar)
+
+    private var canCopy: Bool {
+        switch note.content {
+        case .plainText: return true
+        case .image(let data): return !data.isEmpty
+        case .form: return false   // form fields are copied individually
+        }
+    }
+
+    private var footerBar: some View {
+        HStack(spacing: 6) {
+            // Details: content stats · last modified (full date on hover)
+            HStack(spacing: 4) {
+                Image(systemName: contentDetailIcon)
+                    .font(.system(size: 9))
+                Text(contentDetailValue)
+                Text("·").foregroundColor(Color.white.opacity(0.25))
+                Image(systemName: "clock")
+                    .font(.system(size: 9))
+                Text(Self.relativeFormatter.localizedString(for: note.modifiedAt, relativeTo: Date()))
+            }
+            .font(.system(size: 10))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .help("Modified \(Self.dateFormatter.string(from: note.modifiedAt))")
+
+            Spacer(minLength: 8)
+
+            // Image notes: replace actions (icon-only to stay compact)
+            if case .image(let data) = note.content, !data.isEmpty {
+                iconButton(icon: "doc.on.clipboard", help: "Replace with Clipboard", action: pasteImageFromClipboard)
+                iconButton(icon: "folder", help: "Choose File…", action: chooseImageFile)
+            }
+
+            compactButton(icon: note.isPinned ? "pin.slash.fill" : "pin",
+                          title: note.isPinned ? "Unpin" : "Pin") {
+                noteManager.togglePin(id: note.id)
+            }
+
+            if canCopy {
+                let copied = justCopiedText || justCopiedImage
+                Button(action: {
+                    if case .image = note.content { copyImage() } else { copyPlainText() }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 9))
+                        Text(copied ? "Copied" : "Copy")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(copied ? Color.green.opacity(0.8) : Color.accentColor)
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+                .animation(.easeInOut(duration: 0.2), value: copied)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(appSettings.theme.panelBg)
+    }
+
+    private func compactButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9))
+                Text(title)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(.primary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.07))
+            .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func iconButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .frame(width: 22, height: 20)
                 .background(Color.white.opacity(0.07))
                 .cornerRadius(4)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(appSettings.theme.mainBg)
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func saveTitle() {
@@ -174,6 +276,8 @@ struct NoteEditorView: View {
                 noteManager.updateContent(id: note.id, content: .plainText(newVal))
             }
             .noScrollEdgeGlow()
+            .cornerRadius(6)
+            .padding(12)
     }
 
     // MARK: - Image Body
@@ -190,9 +294,6 @@ struct NoteEditorView: View {
                 }
                 .scrollIndicators(.never)
                 .noScrollEdgeGlow()
-                .overlay(alignment: .bottom) {
-                    replaceImageBar
-                }
             } else {
                 imageDropZone
             }
@@ -249,33 +350,6 @@ struct NoteEditorView: View {
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var replaceImageBar: some View {
-        HStack(spacing: 8) {
-            Button(action: pasteImageFromClipboard) {
-                Label("Replace with Clipboard", systemImage: "doc.on.clipboard")
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.ultraThinMaterial)
-            .cornerRadius(5)
-
-            Button(action: chooseImageFile) {
-                Label("Choose File…", systemImage: "folder")
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.ultraThinMaterial)
-            .cornerRadius(5)
-        }
-        .padding(.bottom, 12)
     }
 
     private func setImage(data: Data) {
@@ -438,7 +512,7 @@ struct NoteEditorView: View {
                 .font(.system(size: 11))
                 .foregroundColor(.primary)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
                 .background(Color.white.opacity(0.05))
                 .cornerRadius(4)
                 .overlay(RoundedRectangle(cornerRadius: 4)
@@ -450,7 +524,7 @@ struct NoteEditorView: View {
                 .font(.system(size: 11))
                 .foregroundColor(.primary)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
                 .background(Color.white.opacity(0.05))
                 .cornerRadius(4)
                 .overlay(RoundedRectangle(cornerRadius: 4)
@@ -468,7 +542,7 @@ struct NoteEditorView: View {
                 Image(systemName: "photo.badge.plus")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 22)
                     .background(Color.white.opacity(0.07))
                     .cornerRadius(4)
             }
@@ -480,7 +554,7 @@ struct NoteEditorView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.white)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 24, height: 22)
                     .background(newFieldValue.trimmingCharacters(in: .whitespaces).isEmpty
                                 ? Color.accentColor.opacity(0.4)
                                 : Color.accentColor)
@@ -490,8 +564,8 @@ struct NoteEditorView: View {
             .disabled(newFieldValue.trimmingCharacters(in: .whitespaces).isEmpty)
             .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .background(appSettings.theme.panelBg)
     }
 
@@ -804,7 +878,7 @@ struct NoteTextEditor: NSViewRepresentable {
     }
 
     private func applyTheme(_ tv: NSTextView) {
-        let bg = theme.nsMainBg
+        let bg = theme.nsEditorBg
         tv.backgroundColor = bg
         tv.enclosingScrollView?.backgroundColor = bg
         tv.textColor = .labelColor

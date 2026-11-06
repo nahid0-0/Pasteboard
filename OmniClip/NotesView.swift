@@ -86,31 +86,34 @@ extension View {
 }
 
 // MARK: - Notes Root View (in-app page)
+// Layout mirrors the clipboard page: card list on the left (same row style, width and
+// status bar), detail pane on the right (header / content / details / action bar).
 
 struct NotesView: View {
     @ObservedObject var noteManager: NoteManager
     @ObservedObject var appSettings: AppSettings
+    @ObservedObject var toolbarState: ToolbarState
 
     @State private var selectedNoteID: UUID?
-    @State private var filterType: String = "All"   // All / Text / Form / Image
-    @State private var leftPanelWidth: CGFloat = 260
-    @State private var dragStartWidth: CGFloat = 260
+    @State private var leftPanelWidth: CGFloat = 380
+    @State private var dragStartWidth: CGFloat = 380
 
-    private let filterOptions = ["All", "Text", "Form", "Image"]
-
+    /// Notes matching the toolbar filter, pinned first (order otherwise preserved)
     var filteredNotes: [Note] {
-        switch filterType {
-        case "Text": return noteManager.notes.filter {
+        let typed: [Note]
+        switch toolbarState.notesFilter {
+        case "Text": typed = noteManager.notes.filter {
             if case .plainText = $0.content { return true }; return false
         }
-        case "Form": return noteManager.notes.filter {
+        case "Form": typed = noteManager.notes.filter {
             if case .form = $0.content { return true }; return false
         }
-        case "Image": return noteManager.notes.filter {
+        case "Image": typed = noteManager.notes.filter {
             if case .image = $0.content { return true }; return false
         }
-        default: return noteManager.notes
+        default: typed = noteManager.notes
         }
+        return typed.filter { $0.isPinned } + typed.filter { !$0.isPinned }
     }
 
     var selectedNote: Note? {
@@ -119,44 +122,17 @@ struct NotesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 0) {
+        let visibleNotes = filteredNotes
+        HStack(spacing: 0) {
             // ── LEFT PANEL ──────────────────────────────────────────
             VStack(spacing: 0) {
-                // Filter strip
-                HStack(spacing: 4) {
-                    ForEach(filterOptions, id: \.self) { option in
-                        Button(action: { filterType = option }) {
-                            Text(option)
-                                .font(.system(size: 10, weight: filterType == option ? .semibold : .regular))
-                                .foregroundColor(filterType == option ? .primary : .secondary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(filterType == option ? Color.secondary.opacity(0.2) : Color.clear)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(appSettings.theme.mainBg)
-
-                Divider()
-
-                // Note list
-                if filteredNotes.isEmpty {
-                    VStack(spacing: 10) {
+                if visibleNotes.isEmpty {
+                    VStack(spacing: 12) {
                         Image(systemName: "note.text")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary.opacity(0.4))
-                        Text("No notes yet")
+                            .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                            .font(.system(size: 11))
+                        Text(noteManager.notes.isEmpty ? "No notes yet" : "No \(toolbarState.notesFilter.lowercased()) notes")
+                            .foregroundColor(.secondary)
                         Text("Use the New button to create one")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
@@ -164,8 +140,8 @@ struct NotesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 3) {
-                            ForEach(filteredNotes) { note in
+                        LazyVStack(spacing: 4) {
+                            ForEach(visibleNotes) { note in
                                 NoteItemRow(
                                     note: note,
                                     isSelected: selectedNoteID == note.id,
@@ -173,7 +149,9 @@ struct NotesView: View {
                                     onSelect: { selectedNoteID = note.id },
                                     onDelete: {
                                         noteManager.deleteNote(id: note.id)
-                                        if selectedNoteID == note.id { selectedNoteID = filteredNotes.first(where: { $0.id != note.id })?.id }
+                                        if selectedNoteID == note.id {
+                                            selectedNoteID = visibleNotes.first(where: { $0.id != note.id })?.id
+                                        }
                                     }
                                 )
                             }
@@ -183,78 +161,81 @@ struct NotesView: View {
                     }
                     .scrollIndicators(.never)
                     .noScrollEdgeGlow()
+                    .clipped()
                 }
 
                 Divider()
 
-                // Bottom count
-                HStack {
-                    Text("\(filteredNotes.count) note\(filteredNotes.count == 1 ? "" : "s")")
+                // Bottom status bar
+                HStack(spacing: 12) {
+                    Text("\(visibleNotes.count) note\(visibleNotes.count == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .frame(height: 24)
+                .padding(8)
                 .background(appSettings.theme.panelBg)
             }
             .frame(width: leftPanelWidth)
-            .background(appSettings.theme.mainBg)
 
-            // Resize handle
+            // Draggable resize handle (same as clipboard page)
             ZStack {
-                Color(NSColor.separatorColor).frame(width: 1)
-                Color.clear.frame(width: 8)
+                Color(NSColor.separatorColor)
+                    .frame(width: 1)
+                NonDraggableArea()
+                    .frame(width: 8)
                     .contentShape(Rectangle())
-                    .onHover { h in h ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
+                    .onHover { hovering in
+                        if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { v in leftPanelWidth = max(180, min(420, dragStartWidth + v.translation.width)) }
+                            .onChanged { value in
+                                leftPanelWidth = max(220, min(650, dragStartWidth + value.translation.width))
+                            }
                             .onEnded { _ in dragStartWidth = leftPanelWidth }
                     )
             }
             .frame(width: 8)
 
             // ── RIGHT PANEL ─────────────────────────────────────────
-            Group {
-                if let note = selectedNote {
-                    NoteEditorView(
-                        note: note,
-                        noteManager: noteManager,
-                        appSettings: appSettings
-                    )
-                    // Force SwiftUI to destroy & recreate this view (and all its @State)
-                    // when the selected note changes. Without this, editingTitle persists
-                    // from the previous note and looks like a shared "app bar" title.
-                    .id(note.id)
-                } else {
-                    VStack(spacing: 12) {
-                        Image(systemName: "note.text")
-                            .font(.system(size: 36))
-                            .foregroundColor(.secondary.opacity(0.25))
-                        Text("Select a note to view it")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 12))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(appSettings.theme.mainBg)
+            if let note = selectedNote {
+                NoteEditorView(
+                    note: note,
+                    noteManager: noteManager,
+                    appSettings: appSettings
+                )
+                // Force SwiftUI to destroy & recreate this view (and all its @State)
+                // when the selected note changes. Without this, editingTitle persists
+                // from the previous note and looks like a shared "app bar" title.
+                .id(note.id)
+                .frame(maxWidth: .infinity)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                    Text("Select a note to view it")
+                        .foregroundColor(.secondary)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
             }
-            }
-            .background(appSettings.theme.mainBg)
-            .onAppear {
-                if selectedNoteID == nil { selectedNoteID = filteredNotes.first?.id }
-            }
-            // Listen for New Note notifications from toolbar menu
-            .onReceive(NotificationCenter.default.publisher(for: .addPlainNote)) { _ in
-                addNote(type: .plainText(""))
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .addFormNote)) { _ in
-                addNote(type: .form([]))
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .addImageNote)) { _ in
-                addNote(type: .image(Data()))
-            }
+        }
+        .background(appSettings.theme.mainBg)
+        .onAppear {
+            if selectedNoteID == nil { selectedNoteID = visibleNotes.first?.id }
+        }
+        // Listen for New Note notifications from toolbar menu
+        .onReceive(NotificationCenter.default.publisher(for: .addPlainNote)) { _ in
+            addNote(type: .plainText(""))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .addFormNote)) { _ in
+            addNote(type: .form([]))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .addImageNote)) { _ in
+            addNote(type: .image(Data()))
         }
     }
 
@@ -264,7 +245,7 @@ struct NotesView: View {
     }
 }
 
-// MARK: - Note Item Row — title + detail strip
+// MARK: - Note Item Row — same look as the clipboard's ClipItemRow
 
 private let relativeFormatter: RelativeDateTimeFormatter = {
     let f = RelativeDateTimeFormatter()
@@ -281,90 +262,92 @@ struct NoteItemRow: View {
 
     @State private var isHovering = false
 
-    private var detailCount: String {
+    /// One-line content preview (only looks at the start of long notes)
+    private var previewText: String {
         switch note.content {
         case .plainText(let t):
-            let chars = t.count
-            return "\(chars) chars"
+            let head = t.prefix(400).trimmingCharacters(in: .whitespacesAndNewlines)
+            return head.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                .first.map(String.init) ?? ""
         case .form(let items):
-            return "\(items.count) field\(items.count == 1 ? "" : "s")"
+            return items.prefix(6)
+                .map { $0.imageData != nil ? "Image" : ($0.label.isEmpty ? $0.value : "\($0.label): \($0.value)") }
+                .joined(separator: " · ")
+        case .image:
+            return ""
+        }
+    }
+
+    private var countChip: (icon: String, text: String) {
+        switch note.content {
+        case .plainText(let t):
+            return ("textformat", "\(t.count) chars")
+        case .form(let items):
+            return ("list.bullet", "\(items.count) field\(items.count == 1 ? "" : "s")")
         case .image(let data):
             if !data.isEmpty, let size = NoteImageCache.shared.pixelSize(for: data) {
-                return "\(size.width) × \(size.height)"
+                return ("aspectratio", "\(size.width) × \(size.height)")
             }
-            return "No image"
+            return ("aspectratio", "No image")
         }
     }
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 8) {
-                // Type icon
-                Image(systemName: note.content.typeIcon)
-                    .font(.system(size: 14))
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-                    .frame(width: 18)
+            VStack(alignment: .leading, spacing: 6) {
+                // Top: leading icon/thumbnail + title & preview
+                HStack(alignment: .center, spacing: 8) {
+                    leadingIcon
 
-                VStack(alignment: .leading, spacing: 3) {
-                    // Title
-                    Text(note.title)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    // Detail strip: time · type · count
-                    HStack(spacing: 6) {
-                        // Relative time
-                        HStack(spacing: 3) {
-                            Image(systemName: "clock")
-                                .font(.system(size: 8))
-                            Text(relativeFormatter.localizedString(for: note.modifiedAt, relativeTo: Date()))
-                                .font(.system(size: 9))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(note.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if !previewText.isEmpty {
+                            Text(previewText)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
-                        .foregroundColor(.secondary.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Text("·")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.4))
+                    Spacer(minLength: 4)
 
-                        // Type badge
-                        HStack(spacing: 2) {
-                            Image(systemName: note.content.typeIcon)
-                                .font(.system(size: 8))
-                            Text(note.content.typeName)
-                                .font(.system(size: 9))
+                    if isHovering {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
                         }
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .buttonStyle(.plain)
+                        .help("Delete note")
+                    }
 
-                        Text("·")
+                    if note.isPinned {
+                        Image(systemName: "pin.fill")
                             .font(.system(size: 8))
-                            .foregroundColor(.secondary.opacity(0.4))
-
-                        // Count
-                        Text(detailCount)
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.7))
+                            .foregroundColor(.accentColor)
                     }
                 }
 
-                Spacer(minLength: 4)
-
-                // Hover delete
-                if isHovering {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                // Bottom: metadata chips (same as clip rows)
+                HStack(spacing: 6) {
+                    metadataChip(icon: "clock",
+                                 text: relativeFormatter.localizedString(for: note.modifiedAt, relativeTo: Date()))
+                    metadataChip(icon: note.content.typeIcon, text: note.content.typeName)
+                    metadataChip(icon: countChip.icon, text: countChip.text)
+                    Spacer()
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: 5)
                         .fill(isSelected ? theme.cardBgSelected : (isHovering ? theme.cardBgHover : theme.cardBgNormal))
                     if isSelected {
                         Rectangle()
@@ -372,11 +355,39 @@ struct NoteItemRow: View {
                             .frame(width: 3)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+    }
+
+    @ViewBuilder
+    private var leadingIcon: some View {
+        if case .image(let data) = note.content, !data.isEmpty,
+           let thumb = NoteImageCache.shared.thumbnail(for: data, maxPixel: 128) {
+            Image(nsImage: thumb)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 28, height: 28)
+                .cornerRadius(4)
+                .clipped()
+        } else {
+            Image(systemName: note.content.typeIcon)
+                .font(.system(size: 14))
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    private func metadataChip(icon: String, text: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 8))
+            Text(text)
+                .font(.system(size: 9))
+        }
+        .foregroundColor(.secondary)
     }
 }
