@@ -79,25 +79,25 @@ enum AppTheme: String, CaseIterable, Identifiable {
 
     var cardBgHover: Color {
         switch self {
-        case .spaceGray:   return Color(hex: "2a2b30")
-        case .nordicNight: return Color(hex: "232f44")
-        case .deepOcean:   return Color(hex: "1b2a4c")
-        case .githubDark:  return Color(hex: "282e38")
-        case .cursorPure:  return Color(hex: "242424")
-        case .cursorSlate: return Color(hex: "1e222b")
-        case .cyberBlack:  return Color(hex: "22252a")
+        case .spaceGray:   return Color(hex: "28292e")
+        case .nordicNight: return Color(hex: "1f293b")
+        case .deepOcean:   return Color(hex: "172441")
+        case .githubDark:  return Color(hex: "242a32")
+        case .cursorPure:  return Color(hex: "1d1d1d")
+        case .cursorSlate: return Color(hex: "1a1d24")
+        case .cyberBlack:  return Color(hex: "1c1f23")
         }
     }
 
     var cardBgSelected: Color {
         switch self {
-        case .spaceGray:   return Color(hex: "2c2d32")
-        case .nordicNight: return Color(hex: "2b3a54")
-        case .deepOcean:   return Color(hex: "23355e")
-        case .githubDark:  return Color(hex: "30363d")
-        case .cursorPure:  return Color(hex: "2e2e2e")
-        case .cursorSlate: return Color(hex: "272c36")
-        case .cyberBlack:  return Color(hex: "2d3138")
+        case .spaceGray:   return Color(hex: "2a2b30")
+        case .nordicNight: return Color(hex: "222e42")
+        case .deepOcean:   return Color(hex: "1b2949")
+        case .githubDark:  return Color(hex: "282d34")
+        case .cursorPure:  return Color(hex: "222222")
+        case .cursorSlate: return Color(hex: "1e2229")
+        case .cyberBlack:  return Color(hex: "212429")
         }
     }
 
