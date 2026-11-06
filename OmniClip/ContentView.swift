@@ -6,6 +6,8 @@ class ToolbarState: ObservableObject {
     @Published var searchText: String = ""
     @Published var typeFilter: String = "All"
     @Published var notesFilter: String = "All"   // Notes page: All / Text / Form / Image
+    @Published var notesSearchText: String = ""
+    @Published var notesSearchFocused: Bool = false
     @Published var searchFieldFocused: Bool = false
     @Published var clipCount: Int = 0
     @Published var isPopoverMode: Bool = false
@@ -133,15 +135,16 @@ struct ContentView: View {
                     }
                 }
                 
-                Divider()
-                
-                // Bottom status bar
+                // Bottom status bar (floating card, same height as the right-hand footer)
                 HStack(spacing: 12) {
-                    Text("\(visibleClips.count) clips")
+                    // "12 clips · 7 text · 2 links · 2 images · 1 file · 1 stack"
+                    Text(clipSummary(visibleClips))
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     
-                    Spacer()
+                    Spacer(minLength: 8)
                     
                     Menu {
                         Button("Clear Unpinned") {
@@ -153,16 +156,37 @@ struct ContentView: View {
                             selectedClipID = nil
                         }
                     } label: {
-                        Image(systemName: "trash")
+                        // Eraser with an erased trail = "clear history" (bulk), so it isn't
+                        // mistaken for deleting the selected clip (the trash in the preview bar)
+                        Image(systemName: "eraser.line.dashed.fill")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .frame(width: 24, height: 24)
+                    .help("Clear history")
+                    
+                    // Add a clip manually (moved here from the toolbar, same look as before)
+                    Button(action: {
+                        NotificationCenter.default.post(name: .showAddClipPanel, object: nil)
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Add")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(4)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Manually add a clip")
                 }
-                .padding(8)
-                .background(appSettings.theme.panelBg)
+                .barCard(appSettings.theme)
             }
             .frame(width: leftPanelWidth)
             
@@ -214,8 +238,8 @@ struct ContentView: View {
                     Text(appSettings.copyOnClick ? "Click any clip to copy" : "Select a clip to preview")
                         .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
+                .contentCard(appSettings.theme, top: 4)
+                .padding(.bottom, BarCardMetrics.margin)
             }
             }
         }
@@ -239,6 +263,30 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Status bar summary
+
+    /// "12 clips · 7 text · 2 links · 2 images · 1 file · 1 stack" (zero counts omitted)
+    private func clipSummary(_ clips: [ClipType]) -> String {
+        func plural(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 ? one : many)" }
+        var text = 0, links = 0, images = 0, files = 0, stacks = 0
+        for clip in clips {
+            switch clip.dataType {
+            case .plainText: text += 1
+            case .url: links += 1
+            case .image: images += 1
+            case .file: files += 1
+            case .stack: stacks += 1
+            }
+        }
+        var parts = [plural(clips.count, "clip", "clips")]
+        if text > 0 { parts.append("\(text) text") }
+        if links > 0 { parts.append(plural(links, "link", "links")) }
+        if images > 0 { parts.append(plural(images, "image", "images")) }
+        if files > 0 { parts.append(plural(files, "file", "files")) }
+        if stacks > 0 { parts.append(plural(stacks, "stack", "stacks")) }
+        return parts.joined(separator: " · ")
+    }
+
     // MARK: - Keyboard Action Handler
     
     private func handleKeyboardAction(_ action: String) {
@@ -307,16 +355,7 @@ struct TitlebarToolbarView: View {
                 SearchField(text: $toolbarState.searchText, isFocused: $toolbarState.searchFieldFocused)
                     .frame(maxWidth: .infinity)
 
-                // Stack toggle — 1st position
-                Button(action: { clipboardManager.toggleStackMode() }) {
-                    Image(systemName: "square.stack.3d.up.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(clipboardManager.isStackMode ? .accentColor : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(clipboardManager.isStackMode ? "Stop Stacking" : "Start Stacking")
-
-                // "All" pill — 2nd position
+                // "All" pill
                 Button(action: { toolbarState.typeFilter = "All" }) {
                     Text("All")
                         .font(.system(size: 10, weight: toolbarState.typeFilter == "All" ? .semibold : .regular))
@@ -365,51 +404,35 @@ struct TitlebarToolbarView: View {
                 .buttonStyle(.plain)
                 .help("Open Notes")
 
-                // Add button
-                Button(action: {
-                    NotificationCenter.default.post(name: .showAddClipPanel, object: nil)
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Add")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(4)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
-                    )
+                // Stack toggle — after Add
+                Button(action: { clipboardManager.toggleStackMode() }) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(clipboardManager.isStackMode ? .accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Manually add a clip")
+                .help(clipboardManager.isStackMode ? "Stop Stacking" : "Start Stacking")
+                .padding(.leading, 10)
 
             // ── Notes page toolbar ──────────────────────────────────
             case .notes:
                 // Back button
                 Button(action: { navigation.goBack() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Back")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(4)
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 12, weight: .heavy))
+                        .foregroundColor(.secondary)
+                        .frame(width: 26, height: 20)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(4)
                 }
                 .buttonStyle(.plain)
+                .help("Back")
 
-                Text("Notes")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .padding(.trailing, 4)
+                // Search field — same as the clipboard page
+                SearchField(text: $toolbarState.notesSearchText,
+                            isFocused: $toolbarState.notesSearchFocused,
+                            placeholder: "Search notes...")
+                    .frame(maxWidth: .infinity)
 
                 // Type filter pills (same style as the clipboard page)
                 ForEach(["All", "Text", "Form", "Image"], id: \.self) { option in
@@ -427,7 +450,7 @@ struct TitlebarToolbarView: View {
                     .buttonStyle(.plain)
                 }
 
-                Spacer()
+                Spacer(minLength: 6)
 
                 // New note menu (stays in toolbar for notes page)
                 Menu {
@@ -451,34 +474,31 @@ struct TitlebarToolbarView: View {
                         Image(systemName: "plus")
                             .font(.system(size: 11, weight: .semibold))
                         Text("New")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 10, weight: .medium))
                     }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.accentColor)
-                    .cornerRadius(4)
+                    .foregroundColor(.secondary)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 52, height: 22)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(4)
+                .help("New note")
 
             // ── Settings page toolbar ───────────────────────────────
             case .settings:
                 Button(action: { navigation.goBack() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Back")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(4)
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 12, weight: .heavy))
+                        .foregroundColor(.secondary)
+                        .frame(width: 26, height: 20)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(4)
                 }
                 .buttonStyle(.plain)
+                .help("Back")
 
                 Text("Settings")
                     .font(.system(size: 12, weight: .semibold))
@@ -489,12 +509,15 @@ struct TitlebarToolbarView: View {
 
             // ── Always-visible: Pin + Gear ──────────────────────────
             Button(action: { appSettings.isFloating.toggle() }) {
-                Image(systemName: appSettings.isFloating ? "pin.circle.fill" : "pin.circle")
-                    .font(.system(size: 14))
+                // Window stacked on top of another = "keep on top" (not a pin — pins mean
+                // pinned clips/notes elsewhere in the app)
+                Image(systemName: "macwindow.on.rectangle")
+                    .font(.system(size: 13))
                     .foregroundColor(appSettings.isFloating ? .accentColor : .secondary)
             }
             .buttonStyle(.plain)
             .help(appSettings.isFloating ? "Stop floating" : "Keep window floating above other apps")
+            .padding(.leading, 10)
 
             Button(action: { navigation.openSettings() }) {
                 Image(systemName: "gear")
@@ -503,6 +526,7 @@ struct TitlebarToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Settings")
+            .padding(.leading, 10)
         }
         .padding(.leading, 6)
         .padding(.trailing, 12)
@@ -515,10 +539,11 @@ struct TitlebarToolbarView: View {
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    var placeholder: String = "Search clips..."
     
     func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField()
-        field.placeholderString = "Search clips..."
+        field.placeholderString = placeholder
         field.delegate = context.coordinator
         field.focusRingType = .none
         field.bezelStyle = .roundedBezel
@@ -556,6 +581,62 @@ struct SearchField: NSViewRepresentable {
             }
         }
     }
+}
+
+// MARK: - Bar card
+// Shared by the detail headers, left status bars and right footers on both pages so
+// they render as matching floating cards with identical height (tops/bottoms line up).
+
+enum BarCardMetrics {
+    static let height: CGFloat = 32       // card height
+    static let margin: CGFloat = 6        // gap around the card
+    static let cornerRadius: CGFloat = 8
+}
+
+extension View {
+    /// Slim floating card (headers, status bars, footers). `top` lets a header card
+    /// line up with the first row of the list on the left (which starts 4pt down).
+    func barCard(_ theme: AppTheme, top: CGFloat = BarCardMetrics.margin) -> some View {
+        self
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity)
+            .frame(height: BarCardMetrics.height)
+            .background(
+                RoundedRectangle(cornerRadius: BarCardMetrics.cornerRadius, style: .continuous)
+                    .fill(theme.cardBgNormal)
+            )
+            .padding(.horizontal, BarCardMetrics.margin)
+            .padding(.bottom, BarCardMetrics.margin)
+            .padding(.top, top)
+    }
+
+    /// Large content card that fills the space between header and footer cards.
+    func contentCard(_ theme: AppTheme, top: CGFloat = 0) -> some View {
+        self
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                // A shape view (not a ShapeStyle) never bleeds into the titlebar
+                RoundedRectangle(cornerRadius: BarCardMetrics.cornerRadius, style: .continuous)
+                    .fill(theme.cardBgNormal)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: BarCardMetrics.cornerRadius, style: .continuous))
+            .padding(.top, top)
+            .padding(.horizontal, BarCardMetrics.margin)
+    }
+}
+
+// MARK: - Relative time ("just now" instead of "in 0s" for brand-new items)
+
+private let sharedRelativeFormatter: RelativeDateTimeFormatter = {
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .abbreviated
+    return f
+}()
+
+func relativeTimeString(_ date: Date) -> String {
+    let now = Date()
+    if now.timeIntervalSince(date) < 5 { return "just now" }
+    return sharedRelativeFormatter.localizedString(for: date, relativeTo: now)
 }
 
 // MARK: - Non-Draggable Area (prevents isMovableByWindowBackground from intercepting drags)

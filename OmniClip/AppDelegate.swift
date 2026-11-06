@@ -69,22 +69,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
-        // Observe stack mode to show/hide blue dot on status bar icon
+        // Observe stack mode to show/hide the blue marker on the status bar icon.
+        // The marker sits to the LEFT of the glyph: while stacking, the button image is
+        // swapped for a copy with transparent space on its left, and the marker is
+        // placed in that space so it never overlaps the icon.
+        let baseIcon = statusItem.button?.image
         stackModeObserver = clipboardManager.$isStackMode.sink { [weak self] isActive in
             guard let self = self, let button = self.statusItem.button else { return }
             let dotID = "stackModeDot"
-            if isActive {
-                if button.subviews.first(where: { $0.accessibilityIdentifier() == dotID }) == nil {
-                    let dot = NSView(frame: NSRect(x: button.bounds.width - 8, y: 6, width: 8, height: 12))
-                    dot.wantsLayer = true
-                    dot.layer?.backgroundColor = NSColor.systemBlue.cgColor
-                    dot.layer?.cornerRadius = 3
-                    dot.setAccessibilityIdentifier(dotID)
-                    dot.autoresizingMask = [.minXMargin, .minYMargin]
-                    button.addSubview(dot)
-                }
-            } else {
-                button.subviews.first(where: { $0.accessibilityIdentifier() == dotID })?.removeFromSuperview()
+            let markerWidth: CGFloat = 6, markerHeight: CGFloat = 12, gap: CGFloat = 3
+
+            button.subviews.first(where: { $0.accessibilityIdentifier() == dotID })?.removeFromSuperview()
+
+            guard isActive, let icon = baseIcon else {
+                button.image = baseIcon
+                return
+            }
+
+            // Template image = [marker space][gap][icon]
+            let leftPad = markerWidth + gap
+            let padded = NSImage(size: NSSize(width: icon.size.width + leftPad, height: icon.size.height),
+                                 flipped: false) { rect in
+                icon.draw(in: NSRect(x: leftPad, y: 0, width: icon.size.width, height: icon.size.height))
+                return true
+            }
+            padded.isTemplate = true
+            padded.accessibilityDescription = icon.accessibilityDescription
+            button.image = padded
+
+            // Place the marker once the button has resized for the wider image
+            DispatchQueue.main.async {
+                // Stack mode may have been switched off again in the meantime
+                guard self.clipboardManager.isStackMode,
+                      !button.subviews.contains(where: { $0.accessibilityIdentifier() == dotID }) else { return }
+                let imageX = (button.bounds.width - padded.size.width) / 2
+                let marker = NSView(frame: NSRect(x: imageX,
+                                                  y: (button.bounds.height - markerHeight) / 2,
+                                                  width: markerWidth,
+                                                  height: markerHeight))
+                marker.wantsLayer = true
+                marker.layer?.backgroundColor = NSColor.systemBlue.cgColor
+                marker.layer?.cornerRadius = 3
+                marker.setAccessibilityIdentifier(dotID)
+                button.addSubview(marker)
             }
         }
         
@@ -125,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.title = "Pasteboard"
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+        panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary, .moveToActiveSpace]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = true
         panel.contentView = NSHostingView(rootView: panelContentView)
@@ -141,7 +168,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if floating {
                 self.panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             } else {
-                self.panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+                self.panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary, .moveToActiveSpace]
             }
         }
         
@@ -201,6 +228,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.orderOut(nil)
     }
     
+    // MARK: - NSWindowDelegate (dismiss on click-away)
+
+    /// The panel is non-activating, so Pasteboard may never become the active app and
+    /// `hidesOnDeactivate` never fires — the panel would linger behind other windows or on
+    /// another desktop while still "visible", so the next hotkey press would *hide* it.
+    /// Hide it ourselves when focus moves to another app.
+    func windowDidResignKey(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === panel else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.appSettings.isFloating,                      // floating = stay put
+                  !self.panel.styleMask.contains(.fullScreen),
+                  NSApp.keyWindow == nil,                           // focus left our app
+                  NSApp.modalWindow == nil                          // not our own dialog
+            else { return }
+            self.panel.orderOut(nil)
+        }
+    }
+
     // MARK: - NSWindowDelegate (Fullscreen)
     
     func windowWillEnterFullScreen(_ notification: Notification) {
@@ -345,17 +391,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         clipboardManager.toggleStackMode()
     }
     
+    /// True only when the panel is really in front of the user (on this desktop, focused).
+    /// `panel.isVisible` alone can be true for a panel left behind other windows or on
+    /// another desktop — using it made the first hotkey press hide an unseen window.
+    private var isPanelInFront: Bool {
+        panel.isVisible && panel.isKeyWindow && panel.isOnActiveSpace
+    }
+
+    private func showPanel() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        toolbarState.isPopoverMode = false
+        centerPanel()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()   // show even if activation is refused/delayed
+    }
+
     @objc func handleGlobalHotKey() {
-        if panel.isVisible {
+        if isPanelInFront {
             panel.orderOut(nil)
         } else {
-            if popover.isShown {
-                popover.performClose(nil)
-            }
-            toolbarState.isPopoverMode = false
-            centerPanel()
-            panel.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            showPanel()
         }
     }
     
@@ -389,16 +447,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     
     private func togglePanel() {
-        if panel.isVisible {
+        if isPanelInFront {
             panel.orderOut(nil)
         } else {
-            if popover.isShown {
-                popover.performClose(nil)
-            }
-            toolbarState.isPopoverMode = false
-            centerPanel()
-            panel.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            showPanel()
         }
     }
     

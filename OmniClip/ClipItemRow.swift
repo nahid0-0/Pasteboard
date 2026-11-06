@@ -10,11 +10,6 @@ struct ClipItemRow: View, Equatable {
     
     @State private var isHovering = false
     
-    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
     
     private static let byteFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter()
@@ -72,7 +67,7 @@ struct ClipItemRow: View, Equatable {
                     // Time chip
                     metadataChip(
                         icon: "clock",
-                        text: Self.relativeDateFormatter.localizedString(for: clip.createdAt, relativeTo: Date())
+                        text: relativeTimeString(clip.createdAt)
                     )
                     
                     // Type chip

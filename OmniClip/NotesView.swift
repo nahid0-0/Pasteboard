@@ -113,7 +113,23 @@ struct NotesView: View {
         }
         default: typed = noteManager.notes
         }
-        return typed.filter { $0.isPinned } + typed.filter { !$0.isPinned }
+        // Search: title, text content, form labels & values
+        let query = toolbarState.notesSearchText.trimmingCharacters(in: .whitespaces)
+        let matched = query.isEmpty ? typed : typed.filter { note in
+            if note.title.localizedCaseInsensitiveContains(query) { return true }
+            switch note.content {
+            case .plainText(let t):
+                return t.localizedCaseInsensitiveContains(query)
+            case .form(let items):
+                return items.contains {
+                    $0.label.localizedCaseInsensitiveContains(query) ||
+                    $0.value.localizedCaseInsensitiveContains(query)
+                }
+            case .image:
+                return false
+            }
+        }
+        return matched.filter { $0.isPinned } + matched.filter { !$0.isPinned }
     }
 
     var selectedNote: Note? {
@@ -131,7 +147,9 @@ struct NotesView: View {
                         Image(systemName: "note.text")
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                        Text(noteManager.notes.isEmpty ? "No notes yet" : "No \(toolbarState.notesFilter.lowercased()) notes")
+                        Text(noteManager.notes.isEmpty ? "No notes yet"
+                             : (!toolbarState.notesSearchText.isEmpty ? "No matching notes"
+                                : "No \(toolbarState.notesFilter.lowercased()) notes"))
                             .foregroundColor(.secondary)
                         Text("Use the New button to create one")
                             .font(.caption)
@@ -164,18 +182,14 @@ struct NotesView: View {
                     .clipped()
                 }
 
-                Divider()
-
-                // Bottom status bar
+                // Bottom status bar (floating card, same height as the right-hand footer)
                 HStack(spacing: 12) {
                     Text("\(visibleNotes.count) note\(visibleNotes.count == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
                 }
-                .frame(height: 24)
-                .padding(8)
-                .background(appSettings.theme.panelBg)
+                .barCard(appSettings.theme)
             }
             .frame(width: leftPanelWidth)
 
@@ -219,8 +233,8 @@ struct NotesView: View {
                     Text("Select a note to view it")
                         .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
+                .contentCard(appSettings.theme, top: 4)
+                .padding(.bottom, BarCardMetrics.margin)
             }
         }
         .background(appSettings.theme.mainBg)
@@ -246,12 +260,6 @@ struct NotesView: View {
 }
 
 // MARK: - Note Item Row — same look as the clipboard's ClipItemRow
-
-private let relativeFormatter: RelativeDateTimeFormatter = {
-    let f = RelativeDateTimeFormatter()
-    f.unitsStyle = .abbreviated
-    return f
-}()
 
 struct NoteItemRow: View {
     let note: Note
@@ -337,7 +345,7 @@ struct NoteItemRow: View {
                 // Bottom: metadata chips (same as clip rows)
                 HStack(spacing: 6) {
                     metadataChip(icon: "clock",
-                                 text: relativeFormatter.localizedString(for: note.modifiedAt, relativeTo: Date()))
+                                 text: relativeTimeString(note.modifiedAt))
                     metadataChip(icon: note.content.typeIcon, text: note.content.typeName)
                     metadataChip(icon: countChip.icon, text: countChip.text)
                     Spacer()

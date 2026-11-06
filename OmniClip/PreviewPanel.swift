@@ -98,7 +98,7 @@ private struct ScrollableTextView: NSViewRepresentable {
         textView.isRichText = true
         textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.textColor = NSColor.labelColor
-        textView.backgroundColor = theme.nsEditorBg
+        textView.backgroundColor = NSColor(theme.cardBgNormal)
         textView.textContainerInset = NSSize(width: 10, height: 10)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -136,7 +136,7 @@ private struct ScrollableTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         if let textView = scrollView.documentView as? NSTextView {
             // Update theme colors dynamically when theme changes
-            textView.backgroundColor = theme.nsEditorBg
+            textView.backgroundColor = NSColor(theme.cardBgNormal)
             if textView.string != text {
                 applyText(to: textView)
                 textView.scrollToBeginningOfDocument(nil)
@@ -256,12 +256,10 @@ struct PreviewPanel: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            headerSection
-            Divider()
+            // Content card — fills the space between the toolbar and the footer card.
+            // (No header: app + type are already shown on the clip row.)
             contentArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(appSettings.theme.emptyBg, ignoresSafeAreaEdges: [])  // don't bleed into the titlebar
-            Divider()
+                .contentCard(appSettings.theme, top: 4)        // lines up with the first clip card
             footerBar
         }
         .onAppear {
@@ -275,57 +273,6 @@ struct PreviewPanel: View {
         }
     }
     
-    // MARK: - Header
-    
-    private var headerSection: some View {
-        HStack(spacing: 8) {
-            if let icon = clip.sourceAppIcon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 16, height: 16)
-                    .cornerRadius(3)
-            } else {
-                Image(systemName: "app.dashed")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .frame(width: 16, height: 16)
-            }
-            
-            // One line: "App · Type"
-            HStack(spacing: 5) {
-                Text(clip.sourceAppName ?? "Unknown App")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                Text("·")
-                    .foregroundColor(Color.white.opacity(0.25))
-                Text(clip.dataType.rawValue)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            
-            Spacer()
-            
-            if clip.isPinned {
-                HStack(spacing: 2) {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 8))
-                    Text("Pinned")
-                        .font(.system(size: 10))
-                }
-                .foregroundColor(.accentColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.accentColor.opacity(0.1))
-                .cornerRadius(4)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(appSettings.theme.mainBg)
-    }
-    
     // MARK: - Content Area
     
     @ViewBuilder
@@ -333,17 +280,10 @@ struct PreviewPanel: View {
         switch clip {
         case .text(let textClip):
             if textClip.isURL {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "link")
-                            .font(.system(size: 12))
-                            .foregroundColor(.accentColor)
-                        Text("URL")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+                VStack(spacing: 14) {
+                    Image(systemName: "link")
+                        .font(.system(size: 30, weight: .light))
+                        .foregroundColor(.accentColor.opacity(0.8))
                     
                     if appSettings.openURLsInBrowser {
                         Button(action: {
@@ -356,7 +296,7 @@ struct PreviewPanel: View {
                                 .font(.system(size: 13))
                                 .foregroundColor(.accentColor)
                                 .underline()
-                                .multilineTextAlignment(.leading)
+                                .multilineTextAlignment(.center)
                         }
                         .buttonStyle(.plain)
                         .onHover { hovering in
@@ -366,43 +306,36 @@ struct PreviewPanel: View {
                                 NSCursor.pop()
                             }
                         }
-                        .padding(.horizontal, 16)
                     } else {
                         Text(textClip.text)
                             .font(.system(size: 13))
                             .foregroundColor(.accentColor)
+                            .multilineTextAlignment(.center)
                             .textSelection(.enabled)
-                            .padding(.horizontal, 16)
                     }
-                    
-                    Spacer()
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollableTextView(text: textClip.text, syntaxHighlighting: appSettings.syntaxHighlighting, showLineNumbers: false, theme: appSettings.theme)
-                    .cornerRadius(6)
                     .padding(4)
             }
             
         case .image(let imageClip):
-            ScrollView {
-                VStack(spacing: 12) {
-                    if let fullImage = imageClip.fullImage() {
-                        Image(nsImage: fullImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: 350)
-                            .cornerRadius(8)
-                            .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                    } else {
-                        Text("Unable to display image")
-                            .foregroundColor(.secondary)
-                            .padding()
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity)
+            if let fullImage = imageClip.fullImage() {
+                Image(nsImage: fullImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: fullImage.size.width, maxHeight: fullImage.size.height)
+                    .cornerRadius(6)
+                    .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 2)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Text("Unable to display image")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .scrollIndicators(.never)
             
         case .file(let fileClip):
             if fileClip.isSingleFile {
@@ -636,9 +569,7 @@ struct PreviewPanel: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(appSettings.theme.panelBg)
+        .barCard(appSettings.theme)
     }
     
     private static let byteFormatter: ByteCountFormatter = {
@@ -717,7 +648,7 @@ struct StackItemCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(theme.cardBgNormal)
+                .fill(theme.cardBgHover)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
