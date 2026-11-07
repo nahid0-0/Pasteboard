@@ -21,7 +21,14 @@ struct ClipItemRow: View, Equatable {
         lhs.clip.id == rhs.clip.id &&
         lhs.isSelected == rhs.isSelected &&
         lhs.clip.isPinned == rhs.clip.isPinned &&
-        lhs.theme == rhs.theme
+        lhs.theme == rhs.theme &&
+        lhs.stackSignature == rhs.stackSignature
+    }
+
+    /// Stacks keep their id while items are added, so include their contents in the diff
+    private var stackSignature: [Int] {
+        if case .stack(let set) = clip { return [set.itemCount, set.isAccepting ? 1 : 0] }
+        return []
     }
     
     var body: some View {
