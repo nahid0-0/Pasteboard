@@ -6,13 +6,11 @@
 
 **A lightweight clipboard manager for macOS that lives in your menu bar.**
 
+[![Download for macOS](https://img.shields.io/badge/Download_for_macOS-0A84FF?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nahid0-0/Pasteboard/releases/latest)
+
 [![macOS](https://img.shields.io/badge/macOS-13.0%2B-000000?style=for-the-badge&logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-F05138?style=for-the-badge&logo=swift&logoColor=white)](https://swift.org)
 [![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-8B5CF6?style=for-the-badge)](LICENSE)
-
----
-
-<img src="Screenshots/preview.webp" alt="Pasteboard preview" width="600"/>
 
 ---
 
@@ -28,7 +26,7 @@
 | **Search & Filter** | Filter by type — Text, Image, URL, or File — and search by content |
 | **Keyboard First** | Configurable global hotkey, arrow key navigation, one-key copy |
 | **Pin Clips** | Pin frequently used clips so they always stay at the top |
-| **Persistent Storage** | History and notes survive app restarts |
+| **Private by Default** | Clipboard history stays in memory and clears when you quit; notes are saved |
 | **Themes** | Multiple dark themes to match your setup |
 
 ---
