@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import ApplicationServices
 
 class ClipboardManager: ObservableObject {
     @Published var clips: [ClipType] = [] {
@@ -380,20 +381,28 @@ class ClipboardManager: ObservableObject {
             capturedText = fileClip.filePaths.sorted().joined(separator: "\n")
             
         case .stack(let set):
-            // Combine all items: texts joined by newline, then files as URLs, then every image
-            // (each image as data + file URL, so the whole stack pastes into Finder too)
+            // Text-only / image-only stacks: texts joined by newline, then files as URLs, then
+            // every image (data + file URL, so the whole stack pastes into Finder too)
             let combinedText = set.combinedText
-            if !combinedText.isEmpty {
-                objects.append(combinedText as NSString)
+            let images = set.allImageClips
+            if !combinedText.isEmpty && !images.isEmpty {
+                // Mixed stack: a single rich item (RTFD + HTML + plain text) with text and images
+                // inline, in stack order. No separate file-URL items: when file URLs are present,
+                // most apps (chat apps, browsers, editors) paste only the files and drop the text.
+                objects.append(Self.richStackItem(for: set, plainText: combinedText))
+            } else {
+                if !combinedText.isEmpty {
+                    objects.append(combinedText as NSString)
+                }
+                objects.append(contentsOf: set.allFilePaths.map { URL(fileURLWithPath: $0) as NSURL })
+                objects.append(contentsOf: images.map { $0.pasteboardItem() })
             }
-            objects.append(contentsOf: set.allFilePaths.map { URL(fileURLWithPath: $0) as NSURL })
-            objects.append(contentsOf: set.allImageClips.map { $0.pasteboardItem() })
             capturedText = combinedText
             capturedImageData = set.allImageClips.last?.imageData
         }
         
         // Write + record changeCount on the poll queue so the poller never sees our own write
-        pollQueue.sync {
+        let changeCount: Int = pollQueue.sync {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             if !objects.isEmpty {
@@ -402,9 +411,105 @@ class ClipboardManager: ObservableObject {
             if let text = capturedText { lastCapturedText = text }
             if let data = capturedImageData { lastCapturedImageData = data }
             lastChangeCount = pasteboard.changeCount
+            return lastChangeCount
+        }
+        
+        // Mixed stacks: many apps paste either the text or the images from one clipboard, never
+        // both. Arm the stack paster so Cmd+V pastes each piece in turn instead.
+        if case .stack(let set) = clip, !set.combinedText.isEmpty, !set.allImageClips.isEmpty {
+            StackPaster.shared.arm(
+                segments: Self.stackSegments(for: set),
+                changeCount: changeCount,
+                write: { [weak self] objects in self?.writeRaw(objects) },
+                restore: { [weak self] in self?.copyToClipboard(.stack(set)) }
+            )
+        } else {
+            StackPaster.shared.disarm()
         }
     }
     
+    /// Write objects to the pasteboard without capturing them as a new clip
+    private func writeRaw(_ objects: [NSPasteboardWriting]) {
+        pollQueue.sync {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.writeObjects(objects)
+            lastChangeCount = pasteboard.changeCount
+        }
+    }
+    
+    /// The stack split into pasteable pieces, in order: consecutive texts joined, each image alone,
+    /// files together. Builders, because a pasteboard item can only be written once.
+    private static func stackSegments(for set: StackSet) -> [() -> [NSPasteboardWriting]] {
+        var segments: [() -> [NSPasteboardWriting]] = []
+        var pendingText: [String] = []
+        func flushText() {
+            guard !pendingText.isEmpty else { return }
+            let text = pendingText.joined(separator: "\n")
+            segments.append { [text as NSString] }
+            pendingText = []
+        }
+        for item in set.items {
+            switch item {
+            case .text(let t):
+                pendingText.append(t.text)
+            case .image(let img):
+                flushText()
+                segments.append { [img.pasteboardItem()] }
+            case .file(let f):
+                flushText()
+                let paths = f.filePaths
+                segments.append { paths.map { URL(fileURLWithPath: $0) as NSURL } }
+            default:
+                break
+            }
+        }
+        flushText()
+        return segments
+    }
+    
+    /// Rich text (RTFD + HTML) with the stack's text and images interleaved in order, plus plain text fallback
+    private static func richStackItem(for set: StackSet, plainText: String) -> NSPasteboardItem {
+        let result = NSMutableAttributedString()
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        var html = "<html><head><meta charset=\"utf-8\"></head><body>"
+        var imageIndex = 0
+        func escapeHTML(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        for item in set.items {
+            switch item {
+            case .text(let t):
+                if result.length > 0 { result.append(NSAttributedString(string: "\n")) }
+                result.append(NSAttributedString(string: t.text, attributes: [.font: font]))
+                html.append("<div>\(escapeHTML(t.text).replacingOccurrences(of: "\n", with: "<br>"))</div>")
+            case .image(let img):
+                guard let png = img.pngData() else { continue }
+                if result.length > 0 { result.append(NSAttributedString(string: "\n")) }
+                imageIndex += 1
+                let wrapper = FileWrapper(regularFileWithContents: png)
+                wrapper.preferredFilename = "image\(imageIndex).png"
+                let attachment = NSTextAttachment(fileWrapper: wrapper)
+                if let image = img.fullImage() { attachment.image = image }
+                result.append(NSAttributedString(attachment: attachment))
+                html.append("<div><img src=\"data:image/png;base64,\(png.base64EncodedString())\"></div>")
+            default:
+                break
+            }
+        }
+        html.append("</body></html>")
+        let pbItem = NSPasteboardItem()
+        let range = NSRange(location: 0, length: result.length)
+        if let rtfd = result.rtfd(from: range, documentAttributes: [:]) {
+            pbItem.setData(rtfd, forType: .rtfd)
+        }
+        pbItem.setString(html, forType: .html)
+        pbItem.setString(plainText, forType: .string)
+        return pbItem
+    }
+
     // Get sorted clips (pinned first) — cached, invalidated on clips change
     var sortedClips: [ClipType] {
         if let cached = _cachedSortedClips { return cached }
@@ -416,3 +521,134 @@ class ClipboardManager: ObservableObject {
     }
 }
 
+
+
+// MARK: - Stack Paster
+
+/// Pastes a mixed (text + image) stack piece by piece. While such a stack is on the clipboard, a
+/// Cmd+V in another app is intercepted and replaced by: put piece 1 on the clipboard, Cmd+V,
+/// piece 2, Cmd+V, ... then the full stack is put back. Needs Accessibility permission; without
+/// it, Cmd+V pastes the single rich-text item instead.
+final class StackPaster {
+    static let shared = StackPaster()
+    
+    private let lock = NSLock()
+    private var armedChangeCount: Int?
+    private var segments: [() -> [NSPasteboardWriting]] = []
+    private var write: (([NSPasteboardWriting]) -> Void)?
+    private var restore: (() -> Void)?
+    
+    private var tap: CFMachPort?
+    private var isPasting = false        // main thread only
+    private var promptedForAccess = false
+    /// Marks Cmd+V events we post ourselves so the tap lets them through
+    private static let marker: Int64 = 0x5053_5450
+    private static let vKeyCode: Int64 = 9
+    
+    func arm(segments: [() -> [NSPasteboardWriting]], changeCount: Int,
+             write: @escaping ([NSPasteboardWriting]) -> Void, restore: @escaping () -> Void) {
+        lock.lock()
+        armedChangeCount = changeCount
+        self.segments = segments
+        self.write = write
+        self.restore = restore
+        lock.unlock()
+        DispatchQueue.main.async { self.installTapIfPossible() }
+    }
+    
+    func disarm() {
+        lock.lock()
+        armedChangeCount = nil
+        segments = []
+        write = nil
+        restore = nil
+        lock.unlock()
+    }
+    
+    private func installTapIfPossible() {
+        guard tap == nil else { return }
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: !promptedForAccess] as CFDictionary
+        promptedForAccess = true
+        guard AXIsProcessTrustedWithOptions(options) else { return }
+        
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let newTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, refcon in
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let paster = Unmanaged<StackPaster>.fromOpaque(refcon).takeUnretainedValue()
+                return paster.handle(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else { return }
+        tap = newTap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, newTap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: newTap, enable: true)
+    }
+    
+    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard type == .keyDown,
+              event.getIntegerValueField(.eventSourceUserData) != Self.marker,
+              event.getIntegerValueField(.keyboardEventKeycode) == Self.vKeyCode else {
+            return Unmanaged.passUnretained(event)
+        }
+        let flags = event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl])
+        guard flags == .maskCommand else { return Unmanaged.passUnretained(event) }
+        
+        // Swallow extra Cmd+V presses while a sequence is running
+        if isPasting { return nil }
+        guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else {
+            return Unmanaged.passUnretained(event)
+        }
+        
+        lock.lock()
+        let armed = armedChangeCount
+        let segs = segments
+        let write = self.write
+        let restore = self.restore
+        lock.unlock()
+        
+        guard let armed, armed == NSPasteboard.general.changeCount,
+              segs.count > 1, let write, let restore,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        else { return Unmanaged.passUnretained(event) }
+        
+        isPasting = true
+        pasteSegment(at: 0, segs, write: write, restore: restore)
+        return nil
+    }
+    
+    private func pasteSegment(at index: Int, _ segs: [() -> [NSPasteboardWriting]],
+                              write: @escaping ([NSPasteboardWriting]) -> Void, restore: @escaping () -> Void) {
+        guard index < segs.count else {
+            // Put the whole stack back so the next Cmd+V pastes it again
+            restore()
+            isPasting = false
+            return
+        }
+        write(segs[index]())
+        postCommandV()
+        // Give the target app time to read the clipboard before it changes (apps read it async)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            self.pasteSegment(at: index + 1, segs, write: write, restore: restore)
+        }
+    }
+    
+    private func postCommandV() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        for keyDown in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(Self.vKeyCode), keyDown: keyDown) else { continue }
+            event.flags = .maskCommand
+            event.setIntegerValueField(.eventSourceUserData, value: Self.marker)
+            event.post(tap: .cgSessionEventTap)
+        }
+    }
+}

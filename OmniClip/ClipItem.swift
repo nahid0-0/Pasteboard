@@ -208,7 +208,7 @@ struct ImageClip: ClipItem {
     }
 
     /// PNG bytes — the original data if it already is PNG, otherwise encoded once and cached
-    private func pngData() -> Data? {
+    func pngData() -> Data? {
         if isPNG { return imageData }
         if let cached = pasteCache.png { return cached }
         var png: Data?
